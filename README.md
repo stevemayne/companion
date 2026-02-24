@@ -47,8 +47,9 @@ The system follows a **Modular Agentic Loop**. Instead of a direct User → LLM 
 ### R2: Pluggable Inference
 
 * The system must use a unified `BaseModel` class.
-* **Development Mode:** Defaults to `localhost:1234` (Windows 5090).
-* **Production Mode:** Toggles to a cloud endpoint via environment variables.
+* Inference must be configurable via environment variables for both `INFERENCE_MODEL` and `INFERENCE_BASE_URL` (for example a remote LM Studio server endpoint).
+* **Development Mode:** Defaults to a local LM Studio-compatible endpoint.
+* **Production Mode:** Can switch to a cloud endpoint via environment variables.
 
 ### R3: The "Inner Monologue"
 

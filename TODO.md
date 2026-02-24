@@ -7,31 +7,32 @@
   - [x] Set up FastAPI app with health endpoint, config, logging, and DI baseline
   - [x] Add toolchain: dependency manager, lint, type-check, tests, pre-commit, `.env.example`
   - [x] Deliverable: runnable API skeleton + CI lint/test pipeline
-- [ ] 2. Core Domain Contracts
-  - [ ] Define Pydantic schemas for messages, memory items, entities, graph relations, monologue state
-  - [ ] Add required `chat_session_id` across all context-bearing schemas and contracts
-  - [ ] Define session seed schemas (companion identity, backstory, traits, goals, relationship setup)
-  - [ ] Define ports/interfaces for providers and stores
-  - [ ] Deliverable: stable swappable contracts
-- [ ] 3. MVP API Surface
-  - [ ] Implement `POST /v1/chat`, `GET /v1/health`, `GET /v1/memory/{user_id}`
-  - [ ] Add session lifecycle endpoints for creating/updating session seed context
-  - [ ] Require `chat_session_id` in request path/payload for context reads and writes
-  - [ ] Add validation, idempotency support, and error model
-  - [ ] Deliverable: end-to-end chat path with mocked dependencies
-- [ ] 4. Orchestrator + Cognitive Loop
-  - [ ] Implement preprocess, retrieval, context assembly, inference, and response path
-  - [ ] Persist `internal_monologue`
-  - [ ] Deliverable: working loop with deterministic tests
-- [ ] 5. Memory Layer Integration
-  - [ ] Episodic store (PostgreSQL)
-  - [ ] Semantic store (pgvector or Qdrant)
-  - [ ] Reflective store (Neo4j)
-  - [ ] Enforce session partitioning in all memory writes and retrieval queries
-  - [ ] Persist and version session seed context per `chat_session_id`
-  - [ ] Deliverable: hybrid retrieval with fallbacks
+- [x] 2. Core Domain Contracts
+  - [x] Define Pydantic schemas for messages, memory items, entities, graph relations, monologue state
+  - [x] Add required `chat_session_id` across all context-bearing schemas and contracts
+  - [x] Define session seed schemas (companion identity, backstory, traits, goals, relationship setup)
+  - [x] Define ports/interfaces for providers and stores
+  - [x] Deliverable: stable swappable contracts
+- [x] 3. MVP API Surface
+  - [x] Implement `POST /v1/chat`, `GET /v1/health`, `GET /v1/memory/{chat_session_id}`
+  - [x] Add session lifecycle endpoints for creating/updating session seed context
+  - [x] Require `chat_session_id` in request path/payload for context reads and writes
+  - [x] Add validation, idempotency support, and error model
+  - [x] Deliverable: end-to-end chat path with mocked dependencies
+- [x] 4. Orchestrator + Cognitive Loop
+  - [x] Implement preprocess, retrieval, context assembly, inference, and response path
+  - [x] Persist `internal_monologue`
+  - [x] Deliverable: working loop with deterministic tests
+- [x] 5. Memory Layer Integration
+  - [x] Episodic store (PostgreSQL)
+  - [x] Semantic store (pgvector or Qdrant)
+  - [x] Reflective store (Neo4j)
+  - [x] Enforce session partitioning in all memory writes and retrieval queries
+  - [x] Persist and version session seed context per `chat_session_id`
+  - [x] Deliverable: hybrid retrieval with fallbacks
 - [ ] 6. Inference Gateway
   - [ ] Add local and cloud provider adapters
+  - [ ] Add required config for `INFERENCE_MODEL` and `INFERENCE_BASE_URL` (remote LM Studio compatible)
   - [ ] Add env-based routing + retry/timeout/failover policy
   - [ ] Deliverable: pluggable inference
 - [ ] 7. Async Agents
@@ -53,4 +54,4 @@
 
 ## In Progress
 
-- [ ] Step 2 currently in progress
+- [ ] Step 6 currently in progress
