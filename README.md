@@ -111,3 +111,86 @@ uv run python scripts/run_eval.py
 Release criteria checklist:
 
 - See `docs/release_criteria.md` for required quality gates and behavior checks.
+
+## 7. Command Reference
+
+### Environment Setup
+
+```bash
+cp .env.example .env
+uv sync --all-groups
+```
+
+### Lifecycle Commands
+
+```bash
+# start infrastructure + app + worker
+docker compose up -d --build
+
+# view status
+docker compose ps
+
+# stream logs
+docker compose logs -f api worker postgres qdrant neo4j redis
+
+# stop all services
+docker compose down
+```
+
+### Local API + Worker Commands
+
+```bash
+# run API locally
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# run worker locally
+uv run python scripts/worker.py
+```
+
+### Migration Commands
+
+```bash
+# current migration head
+uv run alembic heads
+
+# apply all migrations
+uv run alembic upgrade head
+
+# downgrade one revision
+uv run alembic downgrade -1
+
+# create a new migration
+uv run alembic revision -m "describe change"
+```
+
+### Testing Commands
+
+```bash
+# lint + typecheck
+uv run ruff check .
+uv run mypy app
+
+# unit/integration tests (default)
+uv run pytest
+
+# external store integration test
+RUN_INTEGRATION=1 uv run pytest tests/test_external_stores_integration.py
+
+# baseline eval suite
+uv run python scripts/run_eval.py
+
+# quick smoke checks
+uv run pytest tests/test_health.py tests/test_api.py
+```
+
+### Health and Metrics
+
+```bash
+curl -s http://localhost:8000/v1/health
+curl -s http://localhost:8000/metrics
+```
+
+## 8. Operations
+
+- Deployment checklist: `docs/deployment_checklist.md`
+- Runbook, dashboards, rollback: `docs/operations_runbook.md`

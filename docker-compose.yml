@@ -1,4 +1,54 @@
 services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aether-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      USE_EXTERNAL_STORES: "true"
+      POSTGRES_DSN: postgresql://aether:aether@postgres:5432/aether
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aether-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      USE_EXTERNAL_STORES: "true"
+      POSTGRES_DSN: postgresql://aether:aether@postgres:5432/aether
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
+    command: ["uv", "run", "python", "scripts/worker.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      redis:
+        condition: service_started
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: aether-postgres

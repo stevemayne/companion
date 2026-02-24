@@ -47,11 +47,11 @@
   - [x] Add tests proving strict cross-session isolation (no context leakage)
   - [x] Add tests proving seeded context is applied from first turn and is version-editable per session
   - [x] Deliverable: regression and release criteria
-- [ ] 10. Deployment
-  - [ ] Containerize API + workers
-  - [ ] Add migrations, runbooks, dashboards, rollback plan
-  - [ ] Deliverable: staging to production release
+- [x] 10. Deployment
+  - [x] Containerize API + workers
+  - [x] Add migrations, runbooks, dashboards, rollback plan
+  - [x] Deliverable: staging to production release
 
 ## In Progress
 
-- [ ] Step 10 currently in progress
+- [x] Step 10 completed
