@@ -1,0 +1,1 @@
+"""Project Aether FastAPI package."""
