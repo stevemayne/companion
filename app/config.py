@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     fallback_inference_api_key: str | None = None
 
     enable_background_agents: bool = True
+    enable_api_key_auth: bool = False
+    service_api_key: str = "change-me"
+    enable_rate_limit: bool = True
+    rate_limit_per_minute: int = 120
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

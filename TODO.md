@@ -38,10 +38,10 @@
 - [x] 7. Async Agents
   - [x] Add Extraction and Reflector background jobs
   - [x] Deliverable: non-blocking post-processing
-- [ ] 8. Observability + Safety
-  - [ ] Add metrics/tracing/logging/correlation IDs
-  - [ ] Add guardrails, redaction, auth, and rate limiting
-  - [ ] Deliverable: operable and safer baseline
+- [x] 8. Observability + Safety
+  - [x] Add metrics/tracing/logging/correlation IDs
+  - [x] Add guardrails, redaction, auth, and rate limiting
+  - [x] Deliverable: operable and safer baseline
 - [ ] 9. Testing + Evaluation
   - [ ] Add unit + integration tests and eval set
   - [ ] Add tests proving strict cross-session isolation (no context leakage)
@@ -54,4 +54,4 @@
 
 ## In Progress
 
-- [ ] Step 8 currently in progress
+- [ ] Step 9 currently in progress

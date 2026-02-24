@@ -1,8 +1,11 @@
 import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from time import perf_counter
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -15,6 +18,13 @@ from app.api_models import (
     SeedContextUpsertRequest,
 )
 from app.config import Settings, get_settings
+from app.observability import (
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+    InMemoryRateLimiter,
+    metrics_payload,
+)
+from app.safety import contains_prompt_injection, redact_pii
 from app.schemas import SessionSeedContext
 from app.services import AppContainer, build_container
 
@@ -30,29 +40,95 @@ def get_container(request: Request) -> AppContainer:
     return request.app.state.container  # type: ignore[no-any-return]
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
-    configure_logging(settings)
+def create_app(settings: Settings | None = None) -> FastAPI:
+    app_settings = settings or get_settings()
+    configure_logging(app_settings)
 
-    app = FastAPI(title=settings.app_name)
-    app.state.container = build_container(settings)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            app.state.container.agent_dispatcher.shutdown()
 
-    @app.on_event("shutdown")
-    def shutdown_background_agents() -> None:
-        app.state.container.agent_dispatcher.shutdown()
+    app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
+    app.state.container = build_container(app_settings)
+    app.state.rate_limiter = InMemoryRateLimiter(
+        limit_per_minute=app_settings.rate_limit_per_minute
+    )
+
+    @app.middleware("http")
+    async def request_context_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        request_id = request.headers.get("X-Request-ID", str(uuid4()))
+        request.state.request_id = request_id
+
+        path = request.url.path
+        protected = path.startswith("/v1") and path != "/v1/health"
+
+        if protected and app_settings.enable_api_key_auth:
+            api_key = request.headers.get("X-API-Key")
+            if api_key != app_settings.service_api_key:
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content=ApiErrorResponse(
+                        error=ApiErrorBody(code="http_401", message="Unauthorized")
+                    ).model_dump(),
+                    headers={"X-Request-ID": request_id},
+                )
+
+        if protected and app_settings.enable_rate_limit:
+            fallback_key = request.client.host if request.client else "unknown"
+            key = request.headers.get("X-API-Key", fallback_key)
+            if not app.state.rate_limiter.allow(key):
+                return JSONResponse(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    content=ApiErrorResponse(
+                        error=ApiErrorBody(code="http_429", message="Rate limit exceeded")
+                    ).model_dump(),
+                    headers={"X-Request-ID": request_id},
+                )
+
+        start = perf_counter()
+        response = await call_next(request)
+        duration = perf_counter() - start
+
+        response.headers["X-Request-ID"] = request_id
+        REQUEST_COUNT.labels(
+            method=request.method,
+            path=path,
+            status=str(response.status_code),
+        ).inc()
+        REQUEST_LATENCY.labels(method=request.method, path=path).observe(duration)
+
+        logging.getLogger("aether.http").info(
+            "request.complete method=%s path=%s status=%s duration_ms=%.2f request_id=%s",
+            request.method,
+            path,
+            response.status_code,
+            duration * 1000,
+            request_id,
+        )
+        return response
 
     @app.exception_handler(HTTPException)
-    def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
+    def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         body = ApiErrorResponse(
             error=ApiErrorBody(
                 code=f"http_{exc.status_code}",
                 message=str(exc.detail),
             )
         )
-        return JSONResponse(status_code=exc.status_code, content=body.model_dump())
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=body.model_dump(),
+            headers={"X-Request-ID": getattr(request.state, "request_id", "unknown")},
+        )
 
     @app.exception_handler(RequestValidationError)
-    def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         body = ApiErrorResponse(
             error=ApiErrorBody(
                 code="validation_error",
@@ -62,25 +138,41 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content=body.model_dump(),
+            headers={"X-Request-ID": getattr(request.state, "request_id", "unknown")},
         )
 
     @app.get("/v1/health")
     def healthcheck() -> dict[str, str]:
-        cfg = get_settings()
-        return {"status": "ok", "environment": cfg.environment}
+        return {"status": "ok", "environment": app_settings.environment}
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        body, content_type = metrics_payload()
+        return Response(content=body, media_type=content_type)
 
     @app.post(
         "/v1/chat",
         response_model=ChatResponse,
-        responses={422: {"model": ApiErrorResponse}},
+        responses={400: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
     )
     def chat(
         payload: ChatRequest,
         request: Request,
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> ChatResponse:
+        if contains_prompt_injection(payload.message):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Potential prompt injection detected",
+            )
+
+        sanitized = ChatRequest(
+            chat_session_id=payload.chat_session_id,
+            message=redact_pii(payload.message),
+        )
+
         container = get_container(request)
-        return container.chat_service.run_chat(request=payload, idempotency_key=idempotency_key)
+        return container.chat_service.run_chat(request=sanitized, idempotency_key=idempotency_key)
 
     @app.get(
         "/v1/memory/{chat_session_id}",
