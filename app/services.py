@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 
 from app.api_models import ChatRequest, ChatResponse, MemoryResponse, SeedContextUpsertRequest
 from app.config import Settings
+from app.inference import build_inference_provider
 from app.schemas import (
     GraphRelation,
     MemoryItem,
@@ -180,12 +181,6 @@ class InMemorySeedContextStore:
 
     def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None:
         return self._seeds.get(chat_session_id)
-
-
-class EchoModelProvider:
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str:
-        del chat_session_id
-        return f"[mock-response] {prompt}"
 
 
 @dataclass
@@ -441,6 +436,7 @@ def _external_stores_from_settings(
 
 def build_container(settings: Settings) -> AppContainer:
     monologue_store = InMemoryMonologueStore()
+    model_provider = build_inference_provider(settings)
 
     if settings.use_external_stores:
         episodic_store, vector_store, graph_store, seed_store = _external_stores_from_settings(
@@ -458,7 +454,7 @@ def build_container(settings: Settings) -> AppContainer:
         graph_store=graph_store,
         monologue_store=monologue_store,
         seed_store=seed_store,
-        model_provider=EchoModelProvider(),
+        model_provider=model_provider,
     )
     chat_service = ChatService(
         episodic_store=episodic_store,

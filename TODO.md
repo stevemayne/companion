@@ -30,11 +30,11 @@
   - [x] Enforce session partitioning in all memory writes and retrieval queries
   - [x] Persist and version session seed context per `chat_session_id`
   - [x] Deliverable: hybrid retrieval with fallbacks
-- [ ] 6. Inference Gateway
-  - [ ] Add local and cloud provider adapters
-  - [ ] Add required config for `INFERENCE_MODEL` and `INFERENCE_BASE_URL` (remote LM Studio compatible)
-  - [ ] Add env-based routing + retry/timeout/failover policy
-  - [ ] Deliverable: pluggable inference
+- [x] 6. Inference Gateway
+  - [x] Add local and cloud provider adapters
+  - [x] Add required config for `INFERENCE_MODEL` and `INFERENCE_BASE_URL` (remote LM Studio compatible)
+  - [x] Add env-based routing + retry/timeout/failover policy
+  - [x] Deliverable: pluggable inference
 - [ ] 7. Async Agents
   - [ ] Add Extraction and Reflector background jobs
   - [ ] Deliverable: non-blocking post-processing
@@ -54,4 +54,4 @@
 
 ## In Progress
 
-- [ ] Step 6 currently in progress
+- [ ] Step 7 currently in progress
