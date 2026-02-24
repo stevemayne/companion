@@ -42,11 +42,11 @@
   - [x] Add metrics/tracing/logging/correlation IDs
   - [x] Add guardrails, redaction, auth, and rate limiting
   - [x] Deliverable: operable and safer baseline
-- [ ] 9. Testing + Evaluation
-  - [ ] Add unit + integration tests and eval set
-  - [ ] Add tests proving strict cross-session isolation (no context leakage)
-  - [ ] Add tests proving seeded context is applied from first turn and is version-editable per session
-  - [ ] Deliverable: regression and release criteria
+- [x] 9. Testing + Evaluation
+  - [x] Add unit + integration tests and eval set
+  - [x] Add tests proving strict cross-session isolation (no context leakage)
+  - [x] Add tests proving seeded context is applied from first turn and is version-editable per session
+  - [x] Deliverable: regression and release criteria
 - [ ] 10. Deployment
   - [ ] Containerize API + workers
   - [ ] Add migrations, runbooks, dashboards, rollback plan
@@ -54,4 +54,4 @@
 
 ## In Progress
 
-- [ ] Step 9 currently in progress
+- [ ] Step 10 currently in progress

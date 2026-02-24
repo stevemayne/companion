@@ -97,3 +97,17 @@ When a user sends: *"I'm heading to Sarah's house for dinner, I'm pretty nervous
 5. **Post-processing (Async):**
 * **Extraction Agent:** Updates the graph: *User is visiting Sarah on 2026-02-24.*
 * **State Update:** Increments "Affection/Trust" score because the user shared a vulnerable feeling.
+
+---
+
+## 6. Evaluation & Release Gates
+
+Run the baseline evaluation suite:
+
+```bash
+uv run python scripts/run_eval.py
+```
+
+Release criteria checklist:
+
+- See `docs/release_criteria.md` for required quality gates and behavior checks.

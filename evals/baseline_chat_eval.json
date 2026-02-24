@@ -1,0 +1,42 @@
+[
+  {
+    "name": "seed_applies_from_first_turn",
+    "seed": {
+      "companion_name": "Ari",
+      "backstory": "Ari is a thoughtful companion.",
+      "character_traits": ["calm", "curious"],
+      "goals": ["build trust"],
+      "relationship_setup": "Long-term friend"
+    },
+    "messages": [
+      "I feel anxious about dinner"
+    ],
+    "must_contain": [
+      "Companion=Ari",
+      "emotion=anxious"
+    ]
+  },
+  {
+    "name": "semantic_recall_on_follow_up",
+    "messages": [
+      "I argued with Sarah yesterday.",
+      "I am nervous to see Sarah tonight."
+    ],
+    "must_contain": [
+      "semantic_context=I argued with Sarah yesterday.",
+      "graph_context=user-MENTIONED_IN_SESSION->Sarah"
+    ]
+  },
+  {
+    "name": "pii_redaction",
+    "messages": [
+      "My email is jane@example.com"
+    ],
+    "must_contain": [
+      "[REDACTED_EMAIL]"
+    ],
+    "must_not_contain": [
+      "jane@example.com"
+    ]
+  }
+]
