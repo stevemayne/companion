@@ -54,6 +54,18 @@ The system follows a **Modular Agentic Loop**. Instead of a direct User → LLM 
 
 * The system must maintain a hidden `internal_monologue` string that persists between turns. This allows the AI to "plan" its emotional response before speaking.
 
+### R4: Session-Scoped Context Isolation
+
+* All conversational context must be scoped to a `chat_session_id` so multiple chats can run in parallel with different histories, memories, and behavioral setup.
+* Episodic logs, semantic vectors, reflective graph nodes/edges, and `internal_monologue` must all be partitioned by session and never bleed across sessions unless explicitly linked by a future cross-session feature.
+* Retrieval and writes must always include session scope as a required filter/key.
+
+### R5: Session Context Seeding
+
+* A chat session must support pre-seeding context before the first user message (for example: companion identity, backstory, personality traits, goals, and relationship setup).
+* Seeded context must be stored as session-scoped memory and injected into retrieval/context assembly so behavior is consistent from turn one.
+* Session seeding must be editable/versioned so a session can be configured or refined without affecting other sessions.
+
 ---
 
 ## 5. Typical Message Flow (The "Cognitive Loop")
@@ -84,4 +96,3 @@ When a user sends: *"I'm heading to Sarah's house for dinner, I'm pretty nervous
 5. **Post-processing (Async):**
 * **Extraction Agent:** Updates the graph: *User is visiting Sarah on 2026-02-24.*
 * **State Update:** Increments "Affection/Trust" score because the user shared a vulnerable feeling.
-
