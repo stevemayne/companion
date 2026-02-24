@@ -173,6 +173,9 @@ uv run mypy app
 # unit/integration tests (default)
 uv run pytest
 
+# SSE endpoint tests
+uv run pytest tests/test_sse.py
+
 # external store integration test
 RUN_INTEGRATION=1 uv run pytest tests/test_external_stores_integration.py
 
@@ -194,3 +197,42 @@ curl -s http://localhost:8000/metrics
 
 - Deployment checklist: `docs/deployment_checklist.md`
 - Runbook, dashboards, rollback: `docs/operations_runbook.md`
+
+## 9. Frontend + SSE
+
+### Frontend Lifecycle Commands
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Build frontend:
+
+```bash
+cd web
+npm run build
+```
+
+### SSE Endpoint
+
+Route:
+
+- `GET /v1/chat/stream?chat_session_id=<uuid>&message=<text>`
+
+Response media type:
+
+- `text/event-stream`
+
+Event contract:
+
+- `start`: stream metadata (`chat_session_id`, `message_id`, `request_id`, `seed_version`)
+- `delta`: incremental chunk payload (`chunk`)
+- `done`: stream completed (`chat_session_id`, `message_id`)
+
+Example:
+
+```bash
+curl -N \"http://localhost:8000/v1/chat/stream?chat_session_id=00000000-0000-0000-0000-000000000001&message=hello\"
+```

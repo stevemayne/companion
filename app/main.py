@@ -1,4 +1,6 @@
 import logging
+import re
+from asyncio import sleep
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from time import perf_counter
@@ -7,7 +9,8 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api_models import (
     ApiErrorBody,
@@ -52,6 +55,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.container.agent_dispatcher.shutdown()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            origin.strip() for origin in app_settings.cors_allow_origins.split(",") if origin
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.container = build_container(app_settings)
     app.state.rate_limiter = InMemoryRateLimiter(
         limit_per_minute=app_settings.rate_limit_per_minute
@@ -150,6 +162,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body, content_type = metrics_payload()
         return Response(content=body, media_type=content_type)
 
+    def sse_event(event: str, payload: dict[str, str | int | bool | None]) -> str:
+        import json
+
+        return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
     @app.post(
         "/v1/chat",
         response_model=ChatResponse,
@@ -173,6 +190,62 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         container = get_container(request)
         return container.chat_service.run_chat(request=sanitized, idempotency_key=idempotency_key)
+
+    @app.get(
+        "/v1/chat/stream",
+        responses={400: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
+    )
+    async def chat_stream(
+        chat_session_id: UUID,
+        message: str,
+        request: Request,
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    ) -> StreamingResponse:
+        if contains_prompt_injection(message):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Potential prompt injection detected",
+            )
+
+        sanitized = ChatRequest(
+            chat_session_id=chat_session_id,
+            message=redact_pii(message),
+        )
+        container = get_container(request)
+        chat_result = container.chat_service.run_chat(
+            request=sanitized,
+            idempotency_key=idempotency_key,
+        )
+        request_id = getattr(request.state, "request_id", str(uuid4()))
+
+        async def event_generator() -> AsyncIterator[str]:
+            yield sse_event(
+                "start",
+                {
+                    "chat_session_id": str(chat_result.chat_session_id),
+                    "message_id": str(chat_result.assistant_message.message_id),
+                    "request_id": request_id,
+                    "seed_version": chat_result.seed_version,
+                    "idempotency_replay": chat_result.idempotency_replay,
+                },
+            )
+            chunks = re.findall(r"\S+\s*", chat_result.assistant_message.content)
+            for chunk in chunks:
+                yield sse_event("delta", {"chunk": chunk})
+                await sleep(0.01)
+            yield sse_event(
+                "done",
+                {
+                    "chat_session_id": str(chat_result.chat_session_id),
+                    "message_id": str(chat_result.assistant_message.message_id),
+                },
+            )
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
 
     @app.get(
         "/v1/memory/{chat_session_id}",

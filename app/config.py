@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     service_api_key: str = "change-me"
     enable_rate_limit: bool = True
     rate_limit_per_minute: int = 120
+    cors_allow_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -55,3 +55,14 @@
 ## In Progress
 
 - [x] Step 10 completed
+
+## Next Phase: Frontend + Streaming
+
+- [ ] 11. React Frontend + SSE
+  - [x] Scaffold React + TypeScript app in `web/`
+  - [x] Build chat UI with session management and message streaming UX
+  - [x] Implement SSE backend endpoint for streamed chat responses
+  - [x] Wire frontend SSE client to render incremental assistant output
+  - [ ] Add reconnect/error handling for stream interruptions
+  - [ ] Add backend and frontend tests for SSE behavior
+  - [ ] Deliverable: browser chat app receiving streamed responses from FastAPI via SSE
