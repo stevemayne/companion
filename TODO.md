@@ -35,9 +35,9 @@
   - [x] Add required config for `INFERENCE_MODEL` and `INFERENCE_BASE_URL` (remote LM Studio compatible)
   - [x] Add env-based routing + retry/timeout/failover policy
   - [x] Deliverable: pluggable inference
-- [ ] 7. Async Agents
-  - [ ] Add Extraction and Reflector background jobs
-  - [ ] Deliverable: non-blocking post-processing
+- [x] 7. Async Agents
+  - [x] Add Extraction and Reflector background jobs
+  - [x] Deliverable: non-blocking post-processing
 - [ ] 8. Observability + Safety
   - [ ] Add metrics/tracing/logging/correlation IDs
   - [ ] Add guardrails, redaction, auth, and rate limiting
@@ -54,4 +54,4 @@
 
 ## In Progress
 
-- [ ] Step 7 currently in progress
+- [ ] Step 8 currently in progress

@@ -37,6 +37,10 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
     app.state.container = build_container(settings)
 
+    @app.on_event("shutdown")
+    def shutdown_background_agents() -> None:
+        app.state.container.agent_dispatcher.shutdown()
+
     @app.exception_handler(HTTPException)
     def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
         body = ApiErrorResponse(

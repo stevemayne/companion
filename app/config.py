@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     fallback_inference_base_url: str | None = None
     fallback_inference_api_key: str | None = None
 
+    enable_background_agents: bool = True
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
