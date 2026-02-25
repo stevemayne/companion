@@ -145,6 +145,7 @@ export function App() {
     () => isStreaming || !sessionId.trim() || !input.trim(),
     [isStreaming, sessionId, input]
   );
+  const companionLabel = seedDraft.companion_name.trim() || DEFAULT_SEED.companion_name;
 
   const closeActiveStream = (nextStatus = "idle"): void => {
     if (streamRef.current) {
@@ -468,13 +469,15 @@ export function App() {
           <div ref={messagesPaneRef} className="panel messages">
             {messages.map((msg, idx) => (
               <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
-                <strong>{msg.role}</strong>
+                {msg.role === "assistant" && <strong>{companionLabel}</strong>}
+                {msg.role === "system" && <strong>system</strong>}
+                {msg.role === "tool" && <strong>tool</strong>}
                 <div>{msg.content}</div>
               </div>
             ))}
             {(isStreaming || pendingAssistant.length > 0) && (
               <div className="message assistant">
-                <strong>assistant</strong>
+                <strong>{companionLabel}</strong>
                 <div>{pendingAssistant || "..."}</div>
               </div>
             )}
