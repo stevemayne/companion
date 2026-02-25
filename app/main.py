@@ -183,13 +183,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="Potential prompt injection detected",
             )
 
+        safety_transforms: list[str] = []
+        sanitized_message = redact_pii(payload.message)
+        if sanitized_message != payload.message:
+            safety_transforms.append("pii_redaction")
+
         sanitized = ChatRequest(
             chat_session_id=payload.chat_session_id,
-            message=redact_pii(payload.message),
+            message=sanitized_message,
         )
 
         container = get_container(request)
-        return container.chat_service.run_chat(request=sanitized, idempotency_key=idempotency_key)
+        return container.chat_service.run_chat(
+            request=sanitized,
+            idempotency_key=idempotency_key,
+            safety_transforms=safety_transforms,
+        )
 
     @app.get(
         "/v1/chat/stream",
@@ -207,14 +216,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="Potential prompt injection detected",
             )
 
+        safety_transforms: list[str] = []
+        sanitized_message = redact_pii(message)
+        if sanitized_message != message:
+            safety_transforms.append("pii_redaction")
+
         sanitized = ChatRequest(
             chat_session_id=chat_session_id,
-            message=redact_pii(message),
+            message=sanitized_message,
         )
         container = get_container(request)
         chat_result = container.chat_service.run_chat(
             request=sanitized,
             idempotency_key=idempotency_key,
+            safety_transforms=safety_transforms,
         )
         request_id = getattr(request.state, "request_id", str(uuid4()))
 
@@ -255,6 +270,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_memory(chat_session_id: UUID, request: Request) -> MemoryResponse:
         container = get_container(request)
         return container.chat_service.get_memory(chat_session_id=chat_session_id)
+
+    @app.get(
+        "/v1/debug/{chat_session_id}",
+        responses={404: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
+    )
+    def get_debug_traces(chat_session_id: UUID, request: Request) -> dict[str, object]:
+        container = get_container(request)
+        if not container.debug_store.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Debug tracing is disabled.",
+            )
+        traces = container.debug_store.list_traces(chat_session_id=chat_session_id)
+        return {
+            "chat_session_id": str(chat_session_id),
+            "count": len(traces),
+            "traces": traces,
+        }
 
     @app.post(
         "/v1/sessions/{chat_session_id}/seed",

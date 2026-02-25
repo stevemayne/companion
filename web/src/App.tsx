@@ -1,7 +1,10 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { fetchDebugTraces } from "./debugApi";
+import { DebugPanel } from "./DebugPanel";
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
 import { SeedPayload, upsertSeed } from "./seedApi";
+import { DebugTrace } from "./debugTypes";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -90,6 +93,11 @@ export function App() {
   const [seedStatus, setSeedStatus] = useState("not seeded");
   const [seedDraft, setSeedDraft] = useState<SeedDraft>(() => loadSeedDraft());
   const [isProfileOpen, setIsProfileOpen] = useState(true);
+  const [isDebugOpen, setIsDebugOpen] = useState(false);
+  const [debugStatus, setDebugStatus] = useState("idle");
+  const [debugTraces, setDebugTraces] = useState<DebugTrace[]>([]);
+  const [showRawPrompt, setShowRawPrompt] = useState(false);
+  const [verboseDebug, setVerboseDebug] = useState(false);
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -108,6 +116,22 @@ export function App() {
     () => isStreaming || !sessionId.trim() || !input.trim(),
     [isStreaming, sessionId, input]
   );
+
+  const refreshDebug = async (): Promise<void> => {
+    if (!sessionId.trim()) {
+      setDebugStatus("no session");
+      return;
+    }
+    setDebugStatus("loading");
+    try {
+      const response = await fetchDebugTraces(sessionId.trim());
+      setDebugTraces(response.traces);
+      setDebugStatus(`loaded (${response.count})`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      setDebugStatus(message);
+    }
+  };
 
   const bootstrapSeed = async (targetSessionId: string): Promise<void> => {
     const payload = toPayload(seedDraft);
@@ -164,6 +188,7 @@ export function App() {
       setStatus("done");
       setIsStreaming(false);
       source.close();
+      void refreshDebug();
     });
 
     source.onerror = () => {
@@ -174,6 +199,7 @@ export function App() {
       setStatus("error");
       setIsStreaming(false);
       source.close();
+      void refreshDebug();
     };
   };
 
@@ -191,8 +217,10 @@ export function App() {
     setSessionId(newSessionId);
     setMessages([]);
     setPendingAssistant("");
+    setDebugTraces([]);
     setStatus("idle");
     await bootstrapSeed(newSessionId);
+    setDebugStatus("idle");
   };
 
   const onSaveSeed = async () => {
@@ -215,6 +243,18 @@ export function App() {
         </div>
         <div className="meta">seed status: {seedStatus}</div>
       </div>
+
+      <DebugPanel
+        isOpen={isDebugOpen}
+        onToggleOpen={() => setIsDebugOpen((prev) => !prev)}
+        onRefresh={() => void refreshDebug()}
+        traces={debugTraces}
+        status={debugStatus}
+        showRawPrompt={showRawPrompt}
+        setShowRawPrompt={setShowRawPrompt}
+        verbose={verboseDebug}
+        setVerbose={setVerboseDebug}
+      />
 
       <div className="panel">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>

@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -12,6 +13,7 @@ from fastapi import HTTPException, status
 from app.agents import BackgroundAgentDispatcher
 from app.api_models import ChatRequest, ChatResponse, MemoryResponse, SeedContextUpsertRequest
 from app.config import Settings
+from app.debug_trace import DebugTraceStore, build_trace_base, sanitize_debug_text
 from app.inference import build_inference_provider
 from app.prompting import build_companion_system_prompt
 from app.schemas import (
@@ -217,7 +219,7 @@ class CognitiveOrchestrator:
     seed_store: SeedContextStore
     model_provider: ModelProvider
 
-    def handle_turn(self, message: Message) -> Message:
+    def handle_turn(self, message: Message) -> tuple[Message, dict[str, Any]]:
         preprocess = self._preprocess(message.content)
         semantic_context = self.vector_store.query_similar(
             chat_session_id=message.chat_session_id,
@@ -251,8 +253,29 @@ class CognitiveOrchestrator:
             content=response,
         )
         self.episodic_store.append_message(assistant_message)
-        self._postprocess(message=message, preprocess=preprocess)
-        return assistant_message
+        writes = self._postprocess(message=message, preprocess=preprocess)
+        trace = {
+            "preprocess": {
+                "intent": preprocess.intent,
+                "emotion": preprocess.emotion,
+                "entities": preprocess.entities,
+            },
+            "retrieval": {
+                "semantic_items": [item.content for item in semantic_context],
+                "graph_relations": [
+                    f"{rel.source}-{rel.relation}->{rel.target}" for rel in graph_context
+                ],
+            },
+            "prompt": {
+                "summary": self._summarize_prompt(prompt),
+                "raw": sanitize_debug_text(prompt),
+            },
+            "provider": {
+                "name": type(self.model_provider).__name__,
+            },
+            "writes": writes,
+        }
+        return assistant_message, trace
 
     def _preprocess(self, content: str) -> PreprocessResult:
         lowered = content.lower()
@@ -362,36 +385,44 @@ class CognitiveOrchestrator:
         )
         return updated
 
-    def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> None:
-        self.vector_store.upsert_memory(
-            MemoryItem(
-                chat_session_id=message.chat_session_id,
-                kind=MemoryKind.SEMANTIC,
-                content=message.content,
-                score=1.0,
-            )
+    def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
+        semantic_item = MemoryItem(
+            chat_session_id=message.chat_session_id,
+            kind=MemoryKind.SEMANTIC,
+            content=message.content,
+            score=1.0,
         )
+        self.vector_store.upsert_memory(semantic_item)
+        graph_writes: list[str] = []
         for entity in preprocess.entities:
-            self.graph_store.upsert_relation(
-                GraphRelation(
-                    chat_session_id=message.chat_session_id,
-                    source="user",
-                    relation="MENTIONED_IN_SESSION",
-                    target=entity,
-                )
+            relation = GraphRelation(
+                chat_session_id=message.chat_session_id,
+                source="user",
+                relation="MENTIONED_IN_SESSION",
+                target=entity,
             )
+            self.graph_store.upsert_relation(relation)
+            graph_writes.append(f"{relation.source}-{relation.relation}->{relation.target}")
 
         reflection = (
             f"Focus on a {preprocess.emotion} user; "
             f"intent={preprocess.intent}; "
             f"entities={','.join(preprocess.entities) or 'none'}"
         )
-        self.monologue_store.upsert(
-            MonologueState(
-                chat_session_id=message.chat_session_id,
-                internal_monologue=reflection,
-            )
+        monologue_state = MonologueState(
+            chat_session_id=message.chat_session_id,
+            internal_monologue=reflection,
         )
+        self.monologue_store.upsert(monologue_state)
+        return {
+            "semantic_upserts": [semantic_item.content],
+            "graph_upserts": graph_writes,
+            "monologue": monologue_state.internal_monologue,
+        }
+
+    def _summarize_prompt(self, prompt: str) -> str:
+        lines = [line.strip() for line in prompt.splitlines() if line.strip()]
+        return " | ".join(lines[:4])
 
 
 @dataclass
@@ -401,11 +432,31 @@ class ChatService:
     orchestrator: CognitiveOrchestrator
     idempotency_cache: dict[str, Message]
     agent_dispatcher: BackgroundAgentDispatcher
+    debug_store: DebugTraceStore
 
-    def run_chat(self, *, request: ChatRequest, idempotency_key: str | None) -> ChatResponse:
+    def run_chat(
+        self,
+        *,
+        request: ChatRequest,
+        idempotency_key: str | None,
+        safety_transforms: list[str] | None = None,
+    ) -> ChatResponse:
         cache_key = self._cache_key(request.chat_session_id, idempotency_key)
         if cache_key is not None and cache_key in self.idempotency_cache:
             cached = self.idempotency_cache[cache_key]
+            replay_trace = build_trace_base(chat_session_id=request.chat_session_id)
+            replay_trace.update(
+                {
+                    "idempotency_replay": True,
+                    "seed_version": self._seed_version(request.chat_session_id),
+                    "safety_transforms": safety_transforms or [],
+                    "user_message": sanitize_debug_text(request.message),
+                    "assistant_message": sanitize_debug_text(cached.content),
+                    "turn_trace": {"note": "idempotency replay; no new inference"},
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            self.debug_store.add_trace(chat_session_id=request.chat_session_id, trace=replay_trace)
             return ChatResponse(
                 chat_session_id=request.chat_session_id,
                 assistant_message=cached,
@@ -420,7 +471,7 @@ class ChatService:
         )
         self.episodic_store.append_message(user_message)
 
-        assistant_message = self.orchestrator.handle_turn(user_message)
+        assistant_message, trace = self.orchestrator.handle_turn(user_message)
         self.agent_dispatcher.enqueue_turn(
             chat_session_id=request.chat_session_id,
             user_message=user_message.content,
@@ -429,6 +480,19 @@ class ChatService:
 
         if cache_key is not None:
             self.idempotency_cache[cache_key] = assistant_message
+        trace_payload = build_trace_base(chat_session_id=request.chat_session_id)
+        trace_payload.update(
+            {
+                "idempotency_replay": False,
+                "seed_version": self._seed_version(request.chat_session_id),
+                "safety_transforms": safety_transforms or [],
+                "user_message": sanitize_debug_text(request.message),
+                "assistant_message": sanitize_debug_text(assistant_message.content),
+                "turn_trace": trace,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        self.debug_store.add_trace(chat_session_id=request.chat_session_id, trace=trace_payload)
 
         return ChatResponse(
             chat_session_id=request.chat_session_id,
@@ -470,6 +534,7 @@ class AppContainer:
     graph_store: GraphStore
     monologue_store: InMemoryMonologueStore
     agent_dispatcher: BackgroundAgentDispatcher
+    debug_store: DebugTraceStore
     orchestrator: CognitiveOrchestrator
     chat_service: ChatService
 
@@ -496,6 +561,10 @@ def _external_stores_from_settings(
 def build_container(settings: Settings) -> AppContainer:
     monologue_store = InMemoryMonologueStore()
     model_provider = build_inference_provider(settings)
+    debug_store = DebugTraceStore(
+        enabled=settings.debug_tracing,
+        limit_per_session=settings.debug_trace_limit,
+    )
 
     if settings.use_external_stores:
         episodic_store, vector_store, graph_store, seed_store = _external_stores_from_settings(
@@ -529,6 +598,7 @@ def build_container(settings: Settings) -> AppContainer:
         orchestrator=orchestrator,
         idempotency_cache={},
         agent_dispatcher=agent_dispatcher,
+        debug_store=debug_store,
     )
     return AppContainer(
         episodic_store=episodic_store,
@@ -537,6 +607,7 @@ def build_container(settings: Settings) -> AppContainer:
         graph_store=graph_store,
         monologue_store=monologue_store,
         agent_dispatcher=agent_dispatcher,
+        debug_store=debug_store,
         orchestrator=orchestrator,
         chat_service=chat_service,
     )

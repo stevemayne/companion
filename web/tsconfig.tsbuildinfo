@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/defaultseed.ts","./src/main.tsx","./src/seedapi.test.ts","./src/seedapi.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/debugpanel.test.tsx","./src/debugpanel.tsx","./src/debugapi.ts","./src/debugtypes.ts","./src/defaultseed.ts","./src/main.tsx","./src/seedapi.test.ts","./src/seedapi.ts"],"version":"5.9.3"}
