@@ -156,6 +156,9 @@ uv run alembic heads
 # apply all migrations
 uv run alembic upgrade head
 
+# if schema already exists before Alembic tracking, mark current revision as applied
+uv run alembic stamp head
+
 # downgrade one revision
 uv run alembic downgrade -1
 

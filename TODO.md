@@ -66,3 +66,21 @@
   - [ ] Add reconnect/error handling for stream interruptions
   - [ ] Add backend and frontend tests for SSE behavior
   - [ ] Deliverable: browser chat app receiving streamed responses from FastAPI via SSE
+
+## Next Phase: Companion UX + Prompting
+
+- [ ] 12. Stronger Companion Prompt Layer
+  - [ ] Implement a dedicated companion persona/system prompt builder from session seed fields
+  - [ ] Ensure prompt always uses seeded companion name (no generic "Assistant" fallback)
+  - [ ] Include relational context (relationship setup, goals, tone constraints) on every turn
+  - [ ] Add tests validating seeded identity/tone continuity across turns
+  - [ ] Deliverable: consistent companion-style responses tied to session seed
+
+- [ ] 13. UI Seeding + Configuration Defaults
+  - [ ] Add frontend seed form (name, backstory, traits, goals, relationship setup)
+  - [ ] Preload sensible defaults for quick session start
+  - [ ] Call `POST /v1/sessions/{chat_session_id}/seed` on new session bootstrap
+  - [ ] Add UI flow to update seed via `PUT /v1/sessions/{chat_session_id}/seed`
+  - [ ] Persist selected defaults in UI state for reuse
+  - [ ] Add frontend tests for seed create/update request flows
+  - [ ] Deliverable: users can configure companion profile directly from the UI
