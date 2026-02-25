@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
 import { SeedPayload, upsertSeed } from "./seedApi";
@@ -90,10 +90,19 @@ export function App() {
   const [seedStatus, setSeedStatus] = useState("not seeded");
   const [seedDraft, setSeedDraft] = useState<SeedDraft>(() => loadSeedDraft());
   const [isProfileOpen, setIsProfileOpen] = useState(true);
+  const messagesPaneRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seedDraft));
   }, [seedDraft]);
+
+  useEffect(() => {
+    const pane = messagesPaneRef.current;
+    if (!pane) {
+      return;
+    }
+    pane.scrollTop = pane.scrollHeight;
+  }, [messages, pendingAssistant, isStreaming]);
 
   const streamDisabled = useMemo(
     () => isStreaming || !sessionId.trim() || !input.trim(),
@@ -268,7 +277,7 @@ export function App() {
         )}
       </div>
 
-      <div className="panel messages">
+      <div ref={messagesPaneRef} className="panel messages">
         {messages.map((msg, idx) => (
           <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
             <strong>{msg.role}</strong>
@@ -283,7 +292,7 @@ export function App() {
         )}
       </div>
 
-      <form className="panel" onSubmit={onSubmit}>
+      <form className="panel composer" onSubmit={onSubmit}>
         <div className="row">
           <textarea
             value={input}

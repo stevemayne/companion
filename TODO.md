@@ -84,3 +84,28 @@
   - [x] Persist selected defaults in UI state for reuse
   - [x] Add frontend tests for seed create/update request flows
   - [x] Deliverable: users can configure companion profile directly from the UI
+
+## Next Phase: Debuggability + Prompt Tuning
+
+- [ ] 14. Backend Debug Trace Surface
+  - [ ] Add a debug trace object per turn (preprocess, retrieval hits, prompt sections, safety transforms, provider metadata)
+  - [ ] Include both “facts added” and “facts retrieved” in the trace payload
+  - [ ] Capture graph relations upserted and semantic memory items upserted for each turn
+  - [ ] Add opt-in debug mode (`DEBUG_TRACING=true`) so production can disable verbose payloads
+  - [ ] Expose a debug endpoint for latest session traces (for example `GET /v1/debug/{chat_session_id}`)
+  - [ ] Deliverable: API surface for inspecting inference and memory pipeline internals
+
+- [ ] 15. UI Debug Panel
+  - [ ] Add a collapsible “Debug” panel in the React app
+  - [ ] Show timeline of turns with: user input, inferred intent/emotion/entities, retrieved semantic/graph context, final prompt summary
+  - [ ] Show memory writes: new semantic facts, graph edges, monologue updates, seed version used
+  - [ ] Highlight safety transformations (PII redaction, prompt-injection blocks)
+  - [ ] Add filters/toggles (raw vs summarized prompt view, show/hide tokens, trace verbosity)
+  - [ ] Deliverable: in-UI observability for companion optimization and prompt tuning
+
+- [ ] 16. Debug Testing + Hardening
+  - [ ] Add backend tests for trace correctness and session isolation in debug endpoints
+  - [ ] Add frontend tests for debug panel rendering and filter behavior
+  - [ ] Add guardrails to avoid leaking secrets in debug output (redact API keys/tokens)
+  - [ ] Add performance budget checks so debug mode does not regress normal chat latency when disabled
+  - [ ] Deliverable: safe, reliable debug tooling with test coverage

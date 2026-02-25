@@ -13,13 +13,14 @@ body {
 }
 
 .app {
-  min-height: 100vh;
+  height: 100vh;
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   max-width: 900px;
   margin: 0 auto;
+  overflow: hidden;
 }
 
 .panel {
@@ -64,11 +65,18 @@ body {
 }
 
 .messages {
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
   gap: 8px;
-  max-height: 55vh;
-  min-height: 80px;
+  max-height: none;
+  min-height: 120px;
+}
+
+.composer {
+  margin-top: auto;
 }
 
 .message {
