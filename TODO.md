@@ -76,11 +76,11 @@
   - [x] Add tests validating seeded identity/tone continuity across turns
   - [x] Deliverable: consistent companion-style responses tied to session seed
 
-- [ ] 13. UI Seeding + Configuration Defaults
-  - [ ] Add frontend seed form (name, backstory, traits, goals, relationship setup)
-  - [ ] Preload sensible defaults for quick session start
-  - [ ] Call `POST /v1/sessions/{chat_session_id}/seed` on new session bootstrap
-  - [ ] Add UI flow to update seed via `PUT /v1/sessions/{chat_session_id}/seed`
-  - [ ] Persist selected defaults in UI state for reuse
-  - [ ] Add frontend tests for seed create/update request flows
-  - [ ] Deliverable: users can configure companion profile directly from the UI
+- [x] 13. UI Seeding + Configuration Defaults
+  - [x] Add frontend seed form (name, backstory, traits, goals, relationship setup)
+  - [x] Preload sensible defaults for quick session start
+  - [x] Call `POST /v1/sessions/{chat_session_id}/seed` on new session bootstrap
+  - [x] Add UI flow to update seed via `PUT /v1/sessions/{chat_session_id}/seed`
+  - [x] Persist selected defaults in UI state for reuse
+  - [x] Add frontend tests for seed create/update request flows
+  - [x] Deliverable: users can configure companion profile directly from the UI

@@ -15,8 +15,8 @@ body {
 .app {
   min-height: 100vh;
   padding: 24px;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   max-width: 900px;
   margin: 0 auto;
@@ -68,6 +68,7 @@ body {
   display: grid;
   gap: 8px;
   max-height: 55vh;
+  min-height: 80px;
 }
 
 .message {
