@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
@@ -12,6 +13,7 @@ from app.agents import BackgroundAgentDispatcher
 from app.api_models import ChatRequest, ChatResponse, MemoryResponse, SeedContextUpsertRequest
 from app.config import Settings
 from app.inference import build_inference_provider
+from app.prompting import build_companion_system_prompt
 from app.schemas import (
     GraphRelation,
     MemoryItem,
@@ -237,6 +239,10 @@ class CognitiveOrchestrator:
             chat_session_id=message.chat_session_id,
             prompt=prompt,
         )
+        response = self._enforce_seeded_identity(
+            chat_session_id=message.chat_session_id,
+            response=response,
+        )
 
         assistant_message = Message(
             chat_session_id=message.chat_session_id,
@@ -298,6 +304,7 @@ class CognitiveOrchestrator:
         )
         monologue = self.monologue_store.get(chat_session_id=chat_session_id)
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+        companion_system_prompt = build_companion_system_prompt(seed_context)
 
         recent_excerpt = " | ".join(f"{msg.role}:{msg.content}" for msg in recent_messages[-4:])
         semantic_excerpt = " | ".join(item.content for item in semantic_context) or "none"
@@ -319,10 +326,12 @@ class CognitiveOrchestrator:
             seed_text = (
                 f"Companion={seed_context.seed.companion_name}; "
                 f"Traits={','.join(seed_context.seed.character_traits)}; "
-                f"Setup={seed_context.seed.relationship_setup}"
+                f"Setup={seed_context.seed.relationship_setup}; "
+                f"Goals={','.join(seed_context.seed.goals)}"
             )
 
         return (
+            f"companion_system={companion_system_prompt}\n"
             f"seed={seed_text}\n"
             f"internal_monologue={monologue_text}\n"
             f"intent={preprocess.intent}; emotion={preprocess.emotion}; "
@@ -332,6 +341,26 @@ class CognitiveOrchestrator:
             f"graph_context={graph_excerpt}\n"
             f"user_message={user_message.content}"
         )
+
+    def _enforce_seeded_identity(self, *, chat_session_id: UUID, response: str) -> str:
+        seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+        if seed_context is None:
+            return response
+
+        companion_name = seed_context.seed.companion_name
+        updated = re.sub(
+            r"\bmy name is assistant\b",
+            f"my name is {companion_name}",
+            response,
+            flags=re.IGNORECASE,
+        )
+        updated = re.sub(
+            r"\bi am assistant\b",
+            f"I am {companion_name}",
+            updated,
+            flags=re.IGNORECASE,
+        )
+        return updated
 
     def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> None:
         self.vector_store.upsert_memory(

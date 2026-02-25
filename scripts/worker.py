@@ -9,9 +9,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.config import get_settings
-from app.services import build_container
-
 running = True
 
 
@@ -21,6 +18,9 @@ def _stop(_: int, __: object) -> None:
 
 
 def main() -> int:
+    from app.config import get_settings
+    from app.services import build_container
+
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 

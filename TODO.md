@@ -69,12 +69,12 @@
 
 ## Next Phase: Companion UX + Prompting
 
-- [ ] 12. Stronger Companion Prompt Layer
-  - [ ] Implement a dedicated companion persona/system prompt builder from session seed fields
-  - [ ] Ensure prompt always uses seeded companion name (no generic "Assistant" fallback)
-  - [ ] Include relational context (relationship setup, goals, tone constraints) on every turn
-  - [ ] Add tests validating seeded identity/tone continuity across turns
-  - [ ] Deliverable: consistent companion-style responses tied to session seed
+- [x] 12. Stronger Companion Prompt Layer
+  - [x] Implement a dedicated companion persona/system prompt builder from session seed fields
+  - [x] Ensure prompt always uses seeded companion name (no generic "Assistant" fallback)
+  - [x] Include relational context (relationship setup, goals, tone constraints) on every turn
+  - [x] Add tests validating seeded identity/tone continuity across turns
+  - [x] Deliverable: consistent companion-style responses tied to session seed
 
 - [ ] 13. UI Seeding + Configuration Defaults
   - [ ] Add frontend seed form (name, backstory, traits, goals, relationship setup)

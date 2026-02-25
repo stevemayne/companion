@@ -13,10 +13,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def run_eval(dataset_path: Path) -> int:
+    from app.config import Settings
     from app.main import create_app
 
     cases = json.loads(dataset_path.read_text())
-    client = TestClient(create_app())
+    client = TestClient(create_app(Settings(inference_provider="mock")))
 
     passed = 0
     for case in cases:
