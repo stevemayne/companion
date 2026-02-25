@@ -89,3 +89,26 @@ def test_seed_is_applied_from_first_turn() -> None:
     assert chat_response.status_code == 200
     assert chat_response.json()["seed_version"] == 1
     assert "Companion=Ari" in chat_response.json()["assistant_message"]["content"]
+
+
+def test_sessions_list_returns_recent_activity_with_seed_metadata() -> None:
+    client = TestClient(create_app())
+    session_a = str(uuid4())
+    session_b = str(uuid4())
+
+    client.post(f"/v1/sessions/{session_a}/seed", json=_seed_payload(name="Ari"))
+    client.post("/v1/chat", json={"chat_session_id": session_b, "message": "hello from b"})
+    client.post("/v1/chat", json={"chat_session_id": session_a, "message": "hello from a"})
+
+    response = client.get("/v1/sessions?limit=10")
+
+    assert response.status_code == 200
+    sessions = response.json()["sessions"]
+    ids = [item["chat_session_id"] for item in sessions]
+    assert session_a in ids
+    assert session_b in ids
+
+    by_id = {item["chat_session_id"]: item for item in sessions}
+    assert by_id[session_a]["companion_name"] == "Ari"
+    assert by_id[session_a]["message_count"] >= 1
+    assert by_id[session_b]["message_count"] >= 1

@@ -19,6 +19,7 @@ from app.api_models import (
     ChatResponse,
     MemoryResponse,
     SeedContextUpsertRequest,
+    SessionListResponse,
 )
 from app.config import Settings, get_settings
 from app.observability import (
@@ -261,6 +262,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
+
+    @app.get(
+        "/v1/sessions",
+        response_model=SessionListResponse,
+        responses={422: {"model": ApiErrorResponse}},
+    )
+    def list_sessions(
+        request: Request,
+        limit: int = 50,
+    ) -> SessionListResponse:
+        container = get_container(request)
+        return container.chat_service.list_sessions(limit=limit)
 
     @app.get(
         "/v1/memory/{chat_session_id}",

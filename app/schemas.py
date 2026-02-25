@@ -69,3 +69,10 @@ class SessionSeedContext(BaseModel):
     notes: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class SessionActivity(BaseModel):
+    chat_session_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = Field(ge=0)

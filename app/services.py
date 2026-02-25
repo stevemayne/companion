@@ -11,7 +11,14 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 
 from app.agents import BackgroundAgentDispatcher
-from app.api_models import ChatRequest, ChatResponse, MemoryResponse, SeedContextUpsertRequest
+from app.api_models import (
+    ChatRequest,
+    ChatResponse,
+    MemoryResponse,
+    SeedContextUpsertRequest,
+    SessionListResponse,
+    SessionSummary,
+)
 from app.config import Settings
 from app.debug_trace import DebugTraceStore, build_trace_base, sanitize_debug_text
 from app.inference import build_inference_provider
@@ -22,6 +29,7 @@ from app.schemas import (
     MemoryKind,
     Message,
     MonologueState,
+    SessionActivity,
     SessionSeedContext,
 )
 from app.store_adapters import (
@@ -42,6 +50,8 @@ class EpisodicStore(Protocol):
     def append_message(self, message: Message) -> None: ...
 
     def get_recent_messages(self, *, chat_session_id: UUID, limit: int = 50) -> list[Message]: ...
+
+    def list_session_activity(self, *, limit: int = 50) -> list[SessionActivity]: ...
 
 
 class VectorStore(Protocol):
@@ -71,6 +81,8 @@ class SeedContextStore(Protocol):
 
     def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None: ...
 
+    def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]: ...
+
 
 @dataclass
 class PreprocessResult:
@@ -93,6 +105,25 @@ class InMemoryEpisodicStore:
         with self._lock:
             messages = list(self._messages.get(chat_session_id, []))
         return messages[-limit:]
+
+    def list_session_activity(self, *, limit: int = 50) -> list[SessionActivity]:
+        with self._lock:
+            buckets = list(self._messages.items())
+        activity: list[SessionActivity] = []
+        for chat_session_id, messages in buckets:
+            if not messages:
+                continue
+            sorted_messages = sorted(messages, key=lambda item: item.created_at)
+            activity.append(
+                SessionActivity(
+                    chat_session_id=chat_session_id,
+                    created_at=sorted_messages[0].created_at,
+                    updated_at=sorted_messages[-1].created_at,
+                    message_count=len(sorted_messages),
+                )
+            )
+        activity.sort(key=lambda item: item.updated_at, reverse=True)
+        return activity[:limit]
 
 
 class InMemoryVectorStore:
@@ -208,6 +239,12 @@ class InMemorySeedContextStore:
     def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None:
         with self._lock:
             return self._seeds.get(chat_session_id)
+
+    def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]:
+        with self._lock:
+            contexts = list(self._seeds.values())
+        contexts.sort(key=lambda item: item.updated_at, reverse=True)
+        return contexts[:limit]
 
 
 @dataclass
@@ -510,6 +547,39 @@ class ChatService:
             ),
             seed_context=self.seed_store.get(chat_session_id=chat_session_id),
         )
+
+    def list_sessions(self, *, limit: int = 50) -> SessionListResponse:
+        by_session: dict[UUID, SessionSummary] = {}
+        for item in self.episodic_store.list_session_activity(limit=limit):
+            by_session[item.chat_session_id] = SessionSummary(
+                chat_session_id=item.chat_session_id,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                message_count=item.message_count,
+                companion_name=None,
+            )
+
+        for seed in self.seed_store.list_seed_contexts(limit=limit):
+            existing = by_session.get(seed.chat_session_id)
+            if existing is None:
+                by_session[seed.chat_session_id] = SessionSummary(
+                    chat_session_id=seed.chat_session_id,
+                    created_at=seed.created_at,
+                    updated_at=seed.updated_at,
+                    message_count=0,
+                    companion_name=seed.seed.companion_name,
+                )
+                continue
+            existing.created_at = min(existing.created_at, seed.created_at)
+            existing.updated_at = max(existing.updated_at, seed.updated_at)
+            existing.companion_name = seed.seed.companion_name
+
+        sessions = sorted(
+            by_session.values(),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )[:limit]
+        return SessionListResponse(sessions=sessions)
 
     def _seed_version(self, chat_session_id: UUID) -> int | None:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)

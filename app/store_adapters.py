@@ -19,6 +19,7 @@ from app.schemas import (
     MemoryItem,
     MemoryKind,
     Message,
+    SessionActivity,
     SessionSeedContext,
 )
 
@@ -111,6 +112,34 @@ class PostgresEpisodicStore:
                 role=row[2],
                 content=row[3],
                 created_at=row[4],
+            )
+            for row in rows
+        ]
+
+    def list_session_activity(self, *, limit: int = 50) -> list[SessionActivity]:
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      chat_session_id,
+                      MIN(created_at) AS created_at,
+                      MAX(created_at) AS updated_at,
+                      COUNT(*) AS message_count
+                    FROM episodic_messages
+                    GROUP BY chat_session_id
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [
+            SessionActivity(
+                chat_session_id=row[0],
+                created_at=row[1],
+                updated_at=row[2],
+                message_count=int(row[3]),
             )
             for row in rows
         ]
@@ -288,6 +317,54 @@ class PostgresSeedContextStore:
             created_at=row[7],
             updated_at=row[8],
         )
+
+    def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]:
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      chat_session_id,
+                      version,
+                      companion_name,
+                      backstory,
+                      character_traits,
+                      goals,
+                      relationship_setup,
+                      notes,
+                      created_at,
+                      updated_at
+                    FROM session_seed_contexts
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+
+        contexts: list[SessionSeedContext] = []
+        for row in rows:
+            raw_traits = row[4]
+            raw_goals = row[5]
+            traits = json.loads(raw_traits) if isinstance(raw_traits, str) else list(raw_traits)
+            goals = json.loads(raw_goals) if isinstance(raw_goals, str) else list(raw_goals)
+            contexts.append(
+                SessionSeedContext(
+                    chat_session_id=row[0],
+                    version=row[1],
+                    seed=CompanionSeed(
+                        companion_name=row[2],
+                        backstory=row[3],
+                        character_traits=traits,
+                        goals=goals,
+                        relationship_setup=row[6],
+                    ),
+                    notes=row[7],
+                    created_at=row[8],
+                    updated_at=row[9],
+                )
+            )
+        return contexts
 
     def _upsert_row(self, context: SessionSeedContext) -> None:
         with psycopg.connect(self._dsn) as conn:

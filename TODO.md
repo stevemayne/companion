@@ -109,3 +109,15 @@
   - [x] Add guardrails to avoid leaking secrets in debug output (redact API keys/tokens)
   - [x] Add performance budget checks so debug mode does not regress normal chat latency when disabled
   - [x] Deliverable: safe, reliable debug tooling with test coverage
+
+## Next Phase: Session Browser + History Loading
+
+- [ ] 17. Existing Session Loading in Web UI
+  - [x] Add backend endpoint to list chat sessions (summary metadata: `chat_session_id`, created/updated timestamps, optional display title)
+  - [x] Add frontend sidebar that shows recent sessions and supports selecting an existing session
+  - [x] On session click, fetch session history and hydrate the message timeline in UI state
+  - [x] Hydrate companion seed/profile state for the selected session and reflect seeded/unseeded status
+  - [x] Preserve current SSE chat behavior when switching sessions (cancel active stream, avoid cross-session message mixing)
+  - [ ] Add frontend tests for session history loading and session-switch correctness
+  - [x] Add backend tests for session list retrieval
+  - [x] Deliverable: users can browse prior sessions and continue chats with full restored context

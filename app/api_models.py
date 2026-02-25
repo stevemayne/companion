@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -28,6 +29,18 @@ class MemoryResponse(BaseModel):
     chat_session_id: UUID
     messages: list[Message]
     seed_context: SessionSeedContext | None = None
+
+
+class SessionSummary(BaseModel):
+    chat_session_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+    companion_name: str | None = None
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary]
 
 
 class ApiErrorBody(BaseModel):

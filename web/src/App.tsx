@@ -3,11 +3,13 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import { fetchDebugTraces } from "./debugApi";
 import { DebugPanel } from "./DebugPanel";
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
+import { fetchMemory } from "./memoryApi";
 import { SeedPayload, upsertSeed } from "./seedApi";
+import { fetchSessions, SessionSummary } from "./sessionApi";
 import { DebugTrace } from "./debugTypes";
 
 type ChatMessage = {
-  role: "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
 };
 
@@ -83,22 +85,49 @@ function loadSeedDraft(): SeedDraft {
   }
 }
 
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+function sessionLabel(session: SessionSummary): string {
+  if (session.companion_name && session.companion_name.trim().length > 0) {
+    return session.companion_name;
+  }
+  return session.chat_session_id;
+}
+
 export function App() {
   const [sessionId, setSessionId] = useState<string>(crypto.randomUUID());
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsStatus, setSessionsStatus] = useState("idle");
+
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pendingAssistant, setPendingAssistant] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState("idle");
+
   const [seedStatus, setSeedStatus] = useState("not seeded");
   const [seedDraft, setSeedDraft] = useState<SeedDraft>(() => loadSeedDraft());
   const [isProfileOpen, setIsProfileOpen] = useState(true);
+
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [debugStatus, setDebugStatus] = useState("idle");
   const [debugTraces, setDebugTraces] = useState<DebugTrace[]>([]);
   const [showRawPrompt, setShowRawPrompt] = useState(false);
   const [verboseDebug, setVerboseDebug] = useState(false);
+
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
+  const streamRef = useRef<EventSource | null>(null);
+  const currentSessionRef = useRef(sessionId);
+
+  useEffect(() => {
+    currentSessionRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seedDraft));
@@ -117,14 +146,37 @@ export function App() {
     [isStreaming, sessionId, input]
   );
 
-  const refreshDebug = async (): Promise<void> => {
-    if (!sessionId.trim()) {
+  const closeActiveStream = (nextStatus = "idle"): void => {
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
+    }
+    setIsStreaming(false);
+    setPendingAssistant("");
+    setStatus(nextStatus);
+  };
+
+  const refreshSessions = async (): Promise<void> => {
+    setSessionsStatus("loading");
+    try {
+      const listed = await fetchSessions(100);
+      setSessions(listed);
+      setSessionsStatus(`loaded (${listed.length})`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      setSessionsStatus(message);
+    }
+  };
+
+  const refreshDebug = async (targetSessionId?: string): Promise<void> => {
+    const selectedSession = (targetSessionId ?? sessionId).trim();
+    if (!selectedSession) {
       setDebugStatus("no session");
       return;
     }
     setDebugStatus("loading");
     try {
-      const response = await fetchDebugTraces(sessionId.trim());
+      const response = await fetchDebugTraces(selectedSession);
       setDebugTraces(response.traces);
       setDebugStatus(`loaded (${response.count})`);
     } catch (error) {
@@ -149,31 +201,76 @@ export function App() {
     }
   };
 
+  const loadSession = async (targetSessionId: string): Promise<void> => {
+    closeActiveStream("loading session");
+    setSessionId(targetSessionId);
+    setDebugTraces([]);
+    setDebugStatus("idle");
+
+    try {
+      const memory = await fetchMemory(targetSessionId);
+      setMessages(
+        memory.messages.map((item) => ({
+          role: item.role,
+          content: item.content
+        }))
+      );
+
+      if (memory.seed_context) {
+        setSeedDraft(toDraft(memory.seed_context.seed, memory.seed_context.notes ?? DEFAULT_NOTES));
+        setSeedStatus("seeded");
+        setIsProfileOpen(false);
+      } else {
+        setSeedStatus("not seeded");
+        setIsProfileOpen(true);
+      }
+      setStatus("idle");
+      void refreshDebug(targetSessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      setStatus(`load error (${message})`);
+      setMessages([]);
+    }
+  };
+
+  useEffect(() => {
+    void refreshSessions();
+  }, []);
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     const text = input.trim();
-    if (!text || !sessionId.trim()) {
+    const selectedSession = sessionId.trim();
+    if (!text || !selectedSession) {
       return;
     }
 
+    closeActiveStream("connecting");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
-    setPendingAssistant("");
     setInput("");
     setIsStreaming(true);
-    setStatus("connecting");
-    let assistantBuffer = "";
 
+    let assistantBuffer = "";
     const url = new URL("/v1/chat/stream", window.location.origin);
-    url.searchParams.set("chat_session_id", sessionId.trim());
+    url.searchParams.set("chat_session_id", selectedSession);
     url.searchParams.set("message", text);
 
     const source = new EventSource(url.toString());
+    streamRef.current = source;
 
     source.addEventListener("start", () => {
+      if (currentSessionRef.current !== selectedSession) {
+        source.close();
+        return;
+      }
       setStatus("streaming");
     });
 
     source.addEventListener("delta", (evt) => {
+      if (currentSessionRef.current !== selectedSession) {
+        source.close();
+        return;
+      }
       const payload = parseEventData((evt as MessageEvent).data);
       const chunk = String(payload.chunk ?? "");
       assistantBuffer = `${assistantBuffer}${chunk}`;
@@ -181,6 +278,13 @@ export function App() {
     });
 
     source.addEventListener("done", () => {
+      if (streamRef.current === source) {
+        streamRef.current = null;
+      }
+      if (currentSessionRef.current !== selectedSession) {
+        source.close();
+        return;
+      }
       if (assistantBuffer.length > 0) {
         setMessages((prev) => [...prev, { role: "assistant", content: assistantBuffer }]);
       }
@@ -188,10 +292,18 @@ export function App() {
       setStatus("done");
       setIsStreaming(false);
       source.close();
-      void refreshDebug();
+      void refreshDebug(selectedSession);
+      void refreshSessions();
     });
 
     source.onerror = () => {
+      if (streamRef.current === source) {
+        streamRef.current = null;
+      }
+      if (currentSessionRef.current !== selectedSession) {
+        source.close();
+        return;
+      }
       if (assistantBuffer.length > 0) {
         setMessages((prev) => [...prev, { role: "assistant", content: assistantBuffer }]);
       }
@@ -199,7 +311,8 @@ export function App() {
       setStatus("error");
       setIsStreaming(false);
       source.close();
-      void refreshDebug();
+      void refreshDebug(selectedSession);
+      void refreshSessions();
     };
   };
 
@@ -213,14 +326,15 @@ export function App() {
   };
 
   const onNewSession = async () => {
+    closeActiveStream("idle");
     const newSessionId = crypto.randomUUID();
     setSessionId(newSessionId);
     setMessages([]);
     setPendingAssistant("");
     setDebugTraces([]);
-    setStatus("idle");
-    await bootstrapSeed(newSessionId);
     setDebugStatus("idle");
+    await bootstrapSeed(newSessionId);
+    await refreshSessions();
   };
 
   const onSaveSeed = async () => {
@@ -228,127 +342,163 @@ export function App() {
       return;
     }
     await bootstrapSeed(sessionId.trim());
+    await refreshSessions();
   };
 
   return (
     <div className="app">
-      <div className="panel">
-        <h1>Project Aether</h1>
-        <p className="meta">SSE streaming chat client (React + FastAPI)</p>
-        <div className="row">
-          <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
-          <button type="button" onClick={() => void onNewSession()}>
-            New Session
-          </button>
-        </div>
-        <div className="meta">seed status: {seedStatus}</div>
-      </div>
+      <div className="workspace">
+        <aside className="panel sidebar">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ margin: 0 }}>Sessions</h2>
+            <button type="button" onClick={() => void refreshSessions()}>
+              Refresh
+            </button>
+          </div>
+          <div className="meta">{sessionsStatus}</div>
+          <div className="session-list">
+            {sessions.map((item) => (
+              <button
+                key={item.chat_session_id}
+                type="button"
+                className={`session-item ${item.chat_session_id === sessionId ? "active" : ""}`}
+                onClick={() => void loadSession(item.chat_session_id)}
+              >
+                <strong>{sessionLabel(item)}</strong>
+                <span className="meta">{item.chat_session_id}</span>
+                <span className="meta">
+                  updated {formatTimestamp(item.updated_at)} · {item.message_count} msgs
+                </span>
+              </button>
+            ))}
+            {sessions.length === 0 && <div className="meta">No saved sessions yet.</div>}
+          </div>
+        </aside>
 
-      <DebugPanel
-        isOpen={isDebugOpen}
-        onToggleOpen={() => setIsDebugOpen((prev) => !prev)}
-        onRefresh={() => void refreshDebug()}
-        traces={debugTraces}
-        status={debugStatus}
-        showRawPrompt={showRawPrompt}
-        setShowRawPrompt={setShowRawPrompt}
-        verbose={verboseDebug}
-        setVerbose={setVerboseDebug}
-      />
-
-      <div className="panel">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ margin: 0 }}>Companion Profile</h2>
-          <button type="button" onClick={() => setIsProfileOpen((prev) => !prev)}>
-            {isProfileOpen ? "Collapse" : "Expand"}
-          </button>
-        </div>
-        {isProfileOpen && (
-          <>
+        <main className="chat-column">
+          <div className="panel">
+            <h1>Project Aether</h1>
+            <p className="meta">SSE streaming chat client (React + FastAPI)</p>
             <div className="row">
-              <input
-                value={seedDraft.companion_name}
-                onChange={(e) => setSeedDraft((prev) => ({ ...prev, companion_name: e.target.value }))}
-                placeholder="Companion name"
-              />
-            </div>
-            <div className="row">
-              <textarea
-                rows={2}
-                value={seedDraft.backstory}
-                onChange={(e) => setSeedDraft((prev) => ({ ...prev, backstory: e.target.value }))}
-                placeholder="Backstory"
-              />
-            </div>
-            <div className="row">
-              <input
-                value={seedDraft.character_traits}
-                onChange={(e) => setSeedDraft((prev) => ({ ...prev, character_traits: e.target.value }))}
-                placeholder="Traits (comma-separated)"
-              />
-            </div>
-            <div className="row">
-              <input
-                value={seedDraft.goals}
-                onChange={(e) => setSeedDraft((prev) => ({ ...prev, goals: e.target.value }))}
-                placeholder="Goals (comma-separated)"
-              />
-            </div>
-            <div className="row">
-              <input
-                value={seedDraft.relationship_setup}
-                onChange={(e) =>
-                  setSeedDraft((prev) => ({ ...prev, relationship_setup: e.target.value }))
-                }
-                placeholder="Relationship setup"
-              />
-            </div>
-            <div className="row">
-              <input
-                value={seedDraft.notes}
-                onChange={(e) => setSeedDraft((prev) => ({ ...prev, notes: e.target.value }))}
-                placeholder="Notes"
-              />
-              <button type="button" onClick={() => void onSaveSeed()}>
-                Save Seed
+              <input value={sessionId} readOnly />
+              <button type="button" onClick={() => void onNewSession()}>
+                New Session
               </button>
             </div>
-          </>
-        )}
-      </div>
-
-      <div ref={messagesPaneRef} className="panel messages">
-        {messages.map((msg, idx) => (
-          <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
-            <strong>{msg.role}</strong>
-            <div>{msg.content}</div>
+            <div className="meta">seed status: {seedStatus}</div>
           </div>
-        ))}
-        {(isStreaming || pendingAssistant.length > 0) && (
-          <div className="message assistant">
-            <strong>assistant</strong>
-            <div>{pendingAssistant || "..."}</div>
-          </div>
-        )}
-      </div>
 
-      <form className="panel composer" onSubmit={onSubmit}>
-        <div className="row">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onInputKeyDown}
-            placeholder="Type a message..."
-            rows={3}
+          <DebugPanel
+            isOpen={isDebugOpen}
+            onToggleOpen={() => setIsDebugOpen((prev) => !prev)}
+            onRefresh={() => void refreshDebug()}
+            traces={debugTraces}
+            status={debugStatus}
+            showRawPrompt={showRawPrompt}
+            setShowRawPrompt={setShowRawPrompt}
+            verbose={verboseDebug}
+            setVerbose={setVerboseDebug}
           />
-        </div>
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <span className="meta">status: {status}</span>
-          <button type="submit" disabled={streamDisabled}>
-            Send
-          </button>
-        </div>
-      </form>
+
+          <div className="panel">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0 }}>Companion Profile</h2>
+              <button type="button" onClick={() => setIsProfileOpen((prev) => !prev)}>
+                {isProfileOpen ? "Collapse" : "Expand"}
+              </button>
+            </div>
+            {isProfileOpen && (
+              <>
+                <div className="row">
+                  <input
+                    value={seedDraft.companion_name}
+                    onChange={(e) =>
+                      setSeedDraft((prev) => ({ ...prev, companion_name: e.target.value }))
+                    }
+                    placeholder="Companion name"
+                  />
+                </div>
+                <div className="row">
+                  <textarea
+                    rows={2}
+                    value={seedDraft.backstory}
+                    onChange={(e) => setSeedDraft((prev) => ({ ...prev, backstory: e.target.value }))}
+                    placeholder="Backstory"
+                  />
+                </div>
+                <div className="row">
+                  <input
+                    value={seedDraft.character_traits}
+                    onChange={(e) =>
+                      setSeedDraft((prev) => ({ ...prev, character_traits: e.target.value }))
+                    }
+                    placeholder="Traits (comma-separated)"
+                  />
+                </div>
+                <div className="row">
+                  <input
+                    value={seedDraft.goals}
+                    onChange={(e) => setSeedDraft((prev) => ({ ...prev, goals: e.target.value }))}
+                    placeholder="Goals (comma-separated)"
+                  />
+                </div>
+                <div className="row">
+                  <input
+                    value={seedDraft.relationship_setup}
+                    onChange={(e) =>
+                      setSeedDraft((prev) => ({ ...prev, relationship_setup: e.target.value }))
+                    }
+                    placeholder="Relationship setup"
+                  />
+                </div>
+                <div className="row">
+                  <input
+                    value={seedDraft.notes}
+                    onChange={(e) => setSeedDraft((prev) => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Notes"
+                  />
+                  <button type="button" onClick={() => void onSaveSeed()}>
+                    Save Seed
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div ref={messagesPaneRef} className="panel messages">
+            {messages.map((msg, idx) => (
+              <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
+                <strong>{msg.role}</strong>
+                <div>{msg.content}</div>
+              </div>
+            ))}
+            {(isStreaming || pendingAssistant.length > 0) && (
+              <div className="message assistant">
+                <strong>assistant</strong>
+                <div>{pendingAssistant || "..."}</div>
+              </div>
+            )}
+          </div>
+
+          <form className="panel composer" onSubmit={onSubmit}>
+            <div className="row">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={onInputKeyDown}
+                placeholder="Type a message..."
+                rows={3}
+              />
+            </div>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <span className="meta">status: {status}</span>
+              <button type="submit" disabled={streamDisabled}>
+                Send
+              </button>
+            </div>
+          </form>
+        </main>
+      </div>
     </div>
   );
 }
