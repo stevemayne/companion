@@ -66,6 +66,7 @@ class SessionSeedContext(BaseModel):
     chat_session_id: UUID
     version: int = Field(default=1, ge=1)
     seed: CompanionSeed
+    user_description: str | None = None
     notes: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

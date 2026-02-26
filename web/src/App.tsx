@@ -21,6 +21,7 @@ type SeedDraft = {
   character_traits: string;
   goals: string;
   relationship_setup: string;
+  user_description: string;
   notes: string;
 };
 
@@ -34,24 +35,26 @@ function parseEventData(raw: string): SseEventPayload {
   }
 }
 
-function toDraft(seed: SeedPayload, notes: string): SeedDraft {
+function toDraft(seed: SeedPayload, userDescription: string, notes: string): SeedDraft {
   return {
     companion_name: seed.companion_name,
     backstory: seed.backstory,
     character_traits: seed.character_traits.join(", "),
     goals: seed.goals.join(", "),
     relationship_setup: seed.relationship_setup,
+    user_description: userDescription,
     notes
   };
 }
 
-function toPayload(draft: SeedDraft): { seed: SeedPayload; notes: string } {
+function toPayload(draft: SeedDraft): { seed: SeedPayload; user_description?: string; notes: string } {
   const splitList = (value: string): string[] =>
     value
       .split(",")
       .map((item) => item.trim())
       .filter((item) => item.length > 0);
 
+  const userDesc = draft.user_description.trim();
   return {
     seed: {
       companion_name: draft.companion_name.trim() || DEFAULT_SEED.companion_name,
@@ -60,12 +63,13 @@ function toPayload(draft: SeedDraft): { seed: SeedPayload; notes: string } {
       goals: splitList(draft.goals),
       relationship_setup: draft.relationship_setup.trim() || DEFAULT_SEED.relationship_setup
     },
+    user_description: userDesc || undefined,
     notes: draft.notes.trim()
   };
 }
 
 function loadSeedDraft(): SeedDraft {
-  const fallback = toDraft(DEFAULT_SEED, DEFAULT_NOTES);
+  const fallback = toDraft(DEFAULT_SEED, "", DEFAULT_NOTES);
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
     return fallback;
@@ -78,6 +82,7 @@ function loadSeedDraft(): SeedDraft {
       character_traits: parsed.character_traits || fallback.character_traits,
       goals: parsed.goals || fallback.goals,
       relationship_setup: parsed.relationship_setup || fallback.relationship_setup,
+      user_description: parsed.user_description || "",
       notes: parsed.notes || fallback.notes
     };
   } catch {
@@ -218,7 +223,7 @@ export function App() {
       );
 
       if (memory.seed_context) {
-        setSeedDraft(toDraft(memory.seed_context.seed, memory.seed_context.notes ?? DEFAULT_NOTES));
+        setSeedDraft(toDraft(memory.seed_context.seed, memory.seed_context.user_description ?? "", memory.seed_context.notes ?? DEFAULT_NOTES));
         setSeedStatus("seeded");
         setIsProfileOpen(false);
       } else {
@@ -450,6 +455,16 @@ export function App() {
                       setSeedDraft((prev) => ({ ...prev, relationship_setup: e.target.value }))
                     }
                     placeholder="Relationship setup"
+                  />
+                </div>
+                <div className="row">
+                  <textarea
+                    rows={2}
+                    value={seedDraft.user_description}
+                    onChange={(e) =>
+                      setSeedDraft((prev) => ({ ...prev, user_description: e.target.value }))
+                    }
+                    placeholder="About the user (e.g. name, pronouns, interests)"
                   />
                 </div>
                 <div className="row">

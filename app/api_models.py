@@ -22,6 +22,7 @@ class ChatResponse(BaseModel):
 
 class SeedContextUpsertRequest(BaseModel):
     seed: CompanionSeed
+    user_description: str | None = None
     notes: str | None = None
 
 

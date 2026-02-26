@@ -24,9 +24,10 @@ class EndpointConfig:
 
 
 class MockInferenceProvider:
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str:
+    def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str:
         del chat_session_id
-        return f"[mock-response] {prompt}"
+        parts = [f"[{m['role']}] {m['content']}" for m in messages]
+        return "[mock-response]\n" + "\n".join(parts)
 
 
 class OpenAICompatibleProvider:
@@ -43,12 +44,12 @@ class OpenAICompatibleProvider:
         self._max_retries = max_retries
         self._client = client or httpx.Client(timeout=timeout_seconds)
 
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str:
+    def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str:
         del chat_session_id
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
-                return self._call_api(prompt)
+                return self._call_api(messages)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 logger.warning(
@@ -59,7 +60,7 @@ class OpenAICompatibleProvider:
                 )
         raise InferenceError("Primary inference endpoint failed.") from last_error
 
-    def _call_api(self, prompt: str) -> str:
+    def _call_api(self, messages: list[dict[str, str]]) -> str:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._endpoint.api_key:
             headers["Authorization"] = f"Bearer {self._endpoint.api_key}"
@@ -69,7 +70,7 @@ class OpenAICompatibleProvider:
             headers=headers,
             json={
                 "model": self._endpoint.model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "temperature": 0.4,
             },
             timeout=self._timeout_seconds,
@@ -89,12 +90,12 @@ class FailoverInferenceProvider:
         self._primary = primary
         self._secondary = secondary
 
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str:
+    def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str:
         try:
-            return self._primary.generate(chat_session_id=chat_session_id, prompt=prompt)
+            return self._primary.generate(chat_session_id=chat_session_id, messages=messages)
         except InferenceError:
             logger.warning("Primary inference failed, switching to failover endpoint.")
-            return self._secondary.generate(chat_session_id=chat_session_id, prompt=prompt)
+            return self._secondary.generate(chat_session_id=chat_session_id, messages=messages)
 
 
 def build_inference_provider(settings: Settings) -> Any:

@@ -7,6 +7,7 @@ type MemoryMessage = {
 
 type SeedContextResponse = {
   seed: SeedPayload;
+  user_description: string | null;
   notes: string | null;
 };
 

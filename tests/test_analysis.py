@@ -9,8 +9,8 @@ class _JsonProvider:
     def __init__(self, payload: str) -> None:
         self.payload = payload
 
-    def generate(self, *, chat_session_id: object, prompt: str) -> str:
-        del chat_session_id, prompt
+    def generate(self, *, chat_session_id: object, messages: list[dict[str, str]]) -> str:
+        del chat_session_id, messages
         return self.payload
 
 

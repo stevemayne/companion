@@ -42,13 +42,17 @@ def test_companion_prompt_includes_seeded_identity_and_relational_context_every_
     first_content = first.json()["assistant_message"]["content"]
     second_content = second.json()["assistant_message"]["content"]
 
+    # The mock provider serialises the messages array; the system message
+    # should contain the seeded companion identity on every turn.
+    assert "[system]" in first_content.lower()
     assert "You are Ari" in first_content
-    assert "Relationship setup: Close confidant and emotional support partner." in first_content
-    assert "Primary goals in this conversation: build trust, maintain continuity." in first_content
+    assert "Close confidant and emotional support partner" in first_content
+    assert "build trust, maintain continuity" in first_content
 
+    assert "[system]" in second_content.lower()
     assert "You are Ari" in second_content
-    assert "Relationship setup: Close confidant and emotional support partner." in second_content
-    assert "Primary goals in this conversation: build trust, maintain continuity." in second_content
+    assert "Close confidant and emotional support partner" in second_content
+    assert "build trust, maintain continuity" in second_content
 
 
 def test_seeded_identity_rewrites_assistant_name_fallback() -> None:
@@ -59,8 +63,8 @@ def test_seeded_identity_rewrites_assistant_name_fallback() -> None:
     client.post(f"/v1/sessions/{session_id}/seed", json=_seed_payload())
 
     class FallbackNameProvider:
-        def generate(self, *, chat_session_id: object, prompt: str) -> str:
-            del chat_session_id, prompt
+        def generate(self, *, chat_session_id: object, messages: list[dict[str, str]]) -> str:
+            del chat_session_id, messages
             return "My name is Assistant."
 
     app.state.container.orchestrator.model_provider = FallbackNameProvider()

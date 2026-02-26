@@ -13,7 +13,7 @@ from app.schemas import (
 
 
 class ModelProvider(Protocol):
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str: ...
+    def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str: ...
 
 
 class EpisodicStore(Protocol):

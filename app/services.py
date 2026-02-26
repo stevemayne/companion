@@ -44,7 +44,7 @@ from app.store_adapters import (
 logger = logging.getLogger(__name__)
 
 class ModelProvider(Protocol):
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str: ...
+    def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str: ...
 
 
 class EpisodicStore(Protocol):
@@ -203,6 +203,7 @@ class InMemorySeedContextStore:
             chat_session_id=chat_session_id,
             version=1,
             seed=payload.seed,
+            user_description=payload.user_description,
             notes=payload.notes,
         )
         with self._lock:
@@ -223,6 +224,7 @@ class InMemorySeedContextStore:
             chat_session_id=chat_session_id,
             version=existing.version + 1,
             seed=payload.seed,
+            user_description=payload.user_description,
             notes=payload.notes,
         )
         with self._lock:
@@ -265,7 +267,7 @@ class CognitiveOrchestrator:
             chat_session_id=message.chat_session_id,
             entities=preprocess.entities,
         )
-        prompt = self._assemble_context(
+        messages = self._assemble_messages(
             chat_session_id=message.chat_session_id,
             user_message=message,
             preprocess=preprocess,
@@ -274,7 +276,7 @@ class CognitiveOrchestrator:
         )
         response = self.model_provider.generate(
             chat_session_id=message.chat_session_id,
-            prompt=prompt,
+            messages=messages,
         )
         response = self._enforce_seeded_identity(
             chat_session_id=message.chat_session_id,
@@ -303,8 +305,11 @@ class CognitiveOrchestrator:
                 ],
             },
             "prompt": {
-                "summary": self._summarize_prompt(prompt),
-                "raw": sanitize_debug_text(prompt),
+                "summary": self._summarize_messages(messages),
+                "messages": [
+                    {"role": m["role"], "content": sanitize_debug_text(m["content"])}
+                    for m in messages
+                ],
             },
             "provider": {
                 "name": type(self.model_provider).__name__,
@@ -325,7 +330,7 @@ class CognitiveOrchestrator:
             )
         return related
 
-    def _assemble_context(
+    def _assemble_messages(
         self,
         *,
         chat_session_id: UUID,
@@ -333,7 +338,7 @@ class CognitiveOrchestrator:
         preprocess: PreprocessResult,
         semantic_context: list[MemoryItem],
         graph_context: list[GraphRelation],
-    ) -> str:
+    ) -> list[dict[str, str]]:
         recent_messages = self.episodic_store.get_recent_messages(
             chat_session_id=chat_session_id,
             limit=6,
@@ -342,41 +347,45 @@ class CognitiveOrchestrator:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
         companion_system_prompt = build_companion_system_prompt(seed_context)
 
-        recent_excerpt = " | ".join(f"{msg.role}:{msg.content}" for msg in recent_messages[-4:])
-        semantic_excerpt = " | ".join(item.content for item in semantic_context) or "none"
-        graph_excerpt = (
-            " | ".join(
-                f"{relation.source}-{relation.relation}->{relation.target}"
-                for relation in graph_context
-            )
-            or "none"
+        semantic_excerpt = " | ".join(item.content for item in semantic_context)
+        graph_excerpt = " | ".join(
+            f"{rel.source}-{rel.relation}->{rel.target}" for rel in graph_context
         )
 
         if monologue is not None and monologue.internal_monologue:
             monologue_text = monologue.internal_monologue
         else:
-            monologue_text = "No prior monologue."
+            monologue_text = None
 
-        seed_text = "none"
-        if seed_context is not None:
-            seed_text = (
-                f"Companion={seed_context.seed.companion_name}; "
-                f"Traits={','.join(seed_context.seed.character_traits)}; "
-                f"Setup={seed_context.seed.relationship_setup}; "
-                f"Goals={','.join(seed_context.seed.goals)}"
+        context_parts: list[str] = []
+        if monologue_text:
+            context_parts.append(f"Internal reflection: {monologue_text}")
+        if semantic_excerpt:
+            context_parts.append(f"Relevant memories: {semantic_excerpt}")
+        if graph_excerpt:
+            context_parts.append(f"Relationships: {graph_excerpt}")
+        context_parts.append(
+            f"Detected intent: {preprocess.intent}; emotion: {preprocess.emotion}"
+        )
+
+        system_content = companion_system_prompt
+        if context_parts:
+            system_content += (
+                "\n\n## Session Context (internal — never include this in your response)\n"
+                + "\n".join(context_parts)
             )
 
-        return (
-            f"companion_system={companion_system_prompt}\n"
-            f"seed={seed_text}\n"
-            f"internal_monologue={monologue_text}\n"
-            f"intent={preprocess.intent}; emotion={preprocess.emotion}; "
-            f"entities={','.join(preprocess.entities) or 'none'}\n"
-            f"episodic_context={recent_excerpt or 'none'}\n"
-            f"semantic_context={semantic_excerpt}\n"
-            f"graph_context={graph_excerpt}\n"
-            f"user_message={user_message.content}"
-        )
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
+
+        # Add conversation history as proper turns, excluding the current
+        # user message (which was already appended to the store before this
+        # method is called).
+        history = [m for m in recent_messages if m.message_id != user_message.message_id]
+        for msg in history[-4:]:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        messages.append({"role": "user", "content": user_message.content})
+        return messages
 
     def _enforce_seeded_identity(self, *, chat_session_id: UUID, response: str) -> str:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
@@ -433,9 +442,13 @@ class CognitiveOrchestrator:
             "monologue": monologue_state.internal_monologue,
         }
 
-    def _summarize_prompt(self, prompt: str) -> str:
-        lines = [line.strip() for line in prompt.splitlines() if line.strip()]
-        return " | ".join(lines[:4])
+    def _summarize_messages(self, messages: list[dict[str, str]]) -> str:
+        parts: list[str] = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"][:80]
+            parts.append(f"{role}: {content}")
+        return " | ".join(parts[:4])
 
 
 @dataclass

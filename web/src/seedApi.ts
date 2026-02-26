@@ -8,6 +8,7 @@ export type SeedPayload = {
 
 export type SeedUpsertRequest = {
   seed: SeedPayload;
+  user_description?: string;
   notes?: string;
 };
 

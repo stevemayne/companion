@@ -30,7 +30,7 @@ ALLOWED_EMOTIONS = {"anxious", "positive", "neutral"}
 
 
 class ModelProvider(Protocol):
-    def generate(self, *, chat_session_id: UUID, prompt: str) -> str: ...
+    def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,7 @@ class LLMIntentAnalyzer:
         try:
             raw = self._provider.generate(
                 chat_session_id=chat_session_id,
-                prompt=self._analysis_prompt(content),
+                messages=[{"role": "user", "content": self._analysis_prompt(content)}],
             )
             payload = _parse_llm_payload(raw)
             return AnalysisOutcome(

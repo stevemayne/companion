@@ -232,6 +232,7 @@ class PostgresSeedContextStore:
                       character_traits JSONB NOT NULL,
                       goals JSONB NOT NULL,
                       relationship_setup TEXT NOT NULL,
+                      user_description TEXT,
                       notes TEXT,
                       created_at TIMESTAMPTZ NOT NULL,
                       updated_at TIMESTAMPTZ NOT NULL
@@ -252,6 +253,7 @@ class PostgresSeedContextStore:
             chat_session_id=chat_session_id,
             version=1,
             seed=payload.seed,
+            user_description=payload.user_description,
             notes=payload.notes,
         )
         self._upsert_row(context)
@@ -270,6 +272,7 @@ class PostgresSeedContextStore:
             chat_session_id=chat_session_id,
             version=existing.version + 1,
             seed=payload.seed,
+            user_description=payload.user_description,
             notes=payload.notes,
             created_at=existing.created_at,
         )
@@ -288,6 +291,7 @@ class PostgresSeedContextStore:
                       character_traits,
                       goals,
                       relationship_setup,
+                      user_description,
                       notes,
                       created_at,
                       updated_at
@@ -313,9 +317,10 @@ class PostgresSeedContextStore:
                 goals=goals,
                 relationship_setup=row[5],
             ),
-            notes=row[6],
-            created_at=row[7],
-            updated_at=row[8],
+            user_description=row[6],
+            notes=row[7],
+            created_at=row[8],
+            updated_at=row[9],
         )
 
     def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]:
@@ -331,6 +336,7 @@ class PostgresSeedContextStore:
                       character_traits,
                       goals,
                       relationship_setup,
+                      user_description,
                       notes,
                       created_at,
                       updated_at
@@ -359,9 +365,10 @@ class PostgresSeedContextStore:
                         goals=goals,
                         relationship_setup=row[6],
                     ),
-                    notes=row[7],
-                    created_at=row[8],
-                    updated_at=row[9],
+                    user_description=row[7],
+                    notes=row[8],
+                    created_at=row[9],
+                    updated_at=row[10],
                 )
             )
         return contexts
@@ -379,10 +386,11 @@ class PostgresSeedContextStore:
                       character_traits,
                       goals,
                       relationship_setup,
+                      user_description,
                       notes,
                       created_at,
                       updated_at
-                    ) VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s)
                     ON CONFLICT (chat_session_id)
                     DO UPDATE SET
                       version = EXCLUDED.version,
@@ -391,6 +399,7 @@ class PostgresSeedContextStore:
                       character_traits = EXCLUDED.character_traits,
                       goals = EXCLUDED.goals,
                       relationship_setup = EXCLUDED.relationship_setup,
+                      user_description = EXCLUDED.user_description,
                       notes = EXCLUDED.notes,
                       updated_at = EXCLUDED.updated_at
                     """,
@@ -402,6 +411,7 @@ class PostgresSeedContextStore:
                         json.dumps(context.seed.character_traits),
                         json.dumps(context.seed.goals),
                         context.seed.relationship_setup,
+                        context.user_description,
                         context.notes,
                         context.created_at,
                         context.updated_at,

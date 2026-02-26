@@ -88,7 +88,7 @@ def test_seed_is_applied_from_first_turn() -> None:
 
     assert chat_response.status_code == 200
     assert chat_response.json()["seed_version"] == 1
-    assert "Companion=Ari" in chat_response.json()["assistant_message"]["content"]
+    assert "You are Ari" in chat_response.json()["assistant_message"]["content"]
 
 
 def test_sessions_list_returns_recent_activity_with_seed_metadata() -> None:

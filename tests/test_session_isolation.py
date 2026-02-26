@@ -38,9 +38,9 @@ def test_seed_context_isolated_between_sessions() -> None:
 
     assert res_a.status_code == 200
     assert res_b.status_code == 200
-    assert "Companion=Ari" in res_a.json()["assistant_message"]["content"]
-    assert "Companion=Nova" in res_b.json()["assistant_message"]["content"]
-    assert "Companion=Nova" not in res_a.json()["assistant_message"]["content"]
+    assert "You are Ari" in res_a.json()["assistant_message"]["content"]
+    assert "You are Nova" in res_b.json()["assistant_message"]["content"]
+    assert "You are Nova" not in res_a.json()["assistant_message"]["content"]
 
 
 def test_monologue_isolated_between_sessions() -> None:
