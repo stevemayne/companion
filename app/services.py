@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 
 from app.agents import BackgroundAgentDispatcher
+from app.analysis import IntentAnalyzer, build_intent_analyzer
 from app.api_models import (
     ChatRequest,
     ChatResponse,
@@ -29,6 +30,7 @@ from app.schemas import (
     MemoryKind,
     Message,
     MonologueState,
+    PreprocessResult,
     SessionActivity,
     SessionSeedContext,
 )
@@ -40,7 +42,6 @@ from app.store_adapters import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 class ModelProvider(Protocol):
     def generate(self, *, chat_session_id: UUID, prompt: str) -> str: ...
@@ -82,14 +83,6 @@ class SeedContextStore(Protocol):
     def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None: ...
 
     def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]: ...
-
-
-@dataclass
-class PreprocessResult:
-    intent: str
-    emotion: str
-    entities: list[str]
-
 
 class InMemoryEpisodicStore:
     def __init__(self) -> None:
@@ -255,9 +248,14 @@ class CognitiveOrchestrator:
     monologue_store: InMemoryMonologueStore
     seed_store: SeedContextStore
     model_provider: ModelProvider
+    intent_analyzer: IntentAnalyzer
 
     def handle_turn(self, message: Message) -> tuple[Message, dict[str, Any]]:
-        preprocess = self._preprocess(message.content)
+        analysis = self.intent_analyzer.analyze(
+            chat_session_id=message.chat_session_id,
+            content=message.content,
+        )
+        preprocess = analysis.preprocess
         semantic_context = self.vector_store.query_similar(
             chat_session_id=message.chat_session_id,
             query=message.content,
@@ -296,6 +294,7 @@ class CognitiveOrchestrator:
                 "intent": preprocess.intent,
                 "emotion": preprocess.emotion,
                 "entities": preprocess.entities,
+                "analysis": analysis.as_trace(),
             },
             "retrieval": {
                 "semantic_items": [item.content for item in semantic_context],
@@ -313,29 +312,6 @@ class CognitiveOrchestrator:
             "writes": writes,
         }
         return assistant_message, trace
-
-    def _preprocess(self, content: str) -> PreprocessResult:
-        lowered = content.lower()
-        if any(term in lowered for term in ("nervous", "anxious", "worried", "scared")):
-            emotion = "anxious"
-        elif any(term in lowered for term in ("happy", "excited", "great", "good")):
-            emotion = "positive"
-        else:
-            emotion = "neutral"
-
-        if "?" in content:
-            intent = "question"
-        elif any(term in lowered for term in ("i am", "i'm", "i feel", "today")):
-            intent = "status_update"
-        else:
-            intent = "statement"
-
-        entities = [
-            token.strip(",.!?;:")
-            for token in content.split()
-            if token[:1].isupper() and len(token.strip(",.!?;:")) > 1
-        ]
-        return PreprocessResult(intent=intent, emotion=emotion, entities=entities)
 
     def _graph_context(self, *, chat_session_id: UUID, entities: list[str]) -> list[GraphRelation]:
         related: list[GraphRelation] = []
@@ -631,6 +607,7 @@ def _external_stores_from_settings(
 def build_container(settings: Settings) -> AppContainer:
     monologue_store = InMemoryMonologueStore()
     model_provider = build_inference_provider(settings)
+    intent_analyzer = build_intent_analyzer(settings)
     debug_store = DebugTraceStore(
         enabled=settings.debug_tracing,
         limit_per_session=settings.debug_trace_limit,
@@ -661,6 +638,7 @@ def build_container(settings: Settings) -> AppContainer:
         monologue_store=monologue_store,
         seed_store=seed_store,
         model_provider=model_provider,
+        intent_analyzer=intent_analyzer,
     )
     chat_service = ChatService(
         episodic_store=episodic_store,

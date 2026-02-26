@@ -84,3 +84,18 @@ def test_debug_traces_are_session_isolated() -> None:
     assert all(item["chat_session_id"] == session_b for item in debug_b)
     assert len(debug_a) >= 1
     assert len(debug_b) >= 1
+
+
+def test_question_word_is_not_extracted_as_entity() -> None:
+    app = create_app(Settings(debug_tracing=True, inference_provider="mock"))
+    client = TestClient(app)
+    session_id = str(uuid4())
+
+    client.post(
+        "/v1/chat",
+        json={"chat_session_id": session_id, "message": "What are you wearing?"},
+    )
+
+    trace = client.get(f"/v1/debug/{session_id}").json()["traces"][-1]
+    assert trace["turn_trace"]["preprocess"]["intent"] == "question"
+    assert trace["turn_trace"]["preprocess"]["entities"] == []

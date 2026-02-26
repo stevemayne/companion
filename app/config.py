@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     fallback_inference_base_url: str | None = None
     fallback_inference_api_key: str | None = None
 
+    analysis_provider: str = "heuristic"
+    analysis_model: str | None = None
+    analysis_base_url: str | None = None
+    analysis_api_key: str | None = None
+    analysis_timeout_seconds: float = 8.0
+    analysis_max_retries: int = 1
+
     enable_background_agents: bool = True
     enable_api_key_auth: bool = False
     service_api_key: str = "change-me"

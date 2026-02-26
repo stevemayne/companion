@@ -121,3 +121,16 @@
   - [ ] Add frontend tests for session history loading and session-switch correctness
   - [x] Add backend tests for session list retrieval
   - [x] Deliverable: users can browse prior sessions and continue chats with full restored context
+
+## Next Phase: LLM/NLP Preprocessing
+
+- [ ] 18. Intent + Entity Analysis Upgrade
+  - [x] Add `IntentAnalyzer` interface with provider modes (`heuristic`, `llm`, optional `nlp`)
+  - [x] Add config/env routing for analysis provider and timeout/retry behavior
+  - [x] Implement LLM analysis call that returns strict JSON (`intent`, `emotion`, `entities`, optional safety flags)
+  - [x] Validate analysis output with Pydantic; fallback to heuristics on invalid/timeout/error
+  - [ ] Add optional NLP entity extractor (e.g. spaCy) and merge strategy with LLM output
+  - [x] Record analysis provider, latency, and fallback reason in debug traces
+  - [x] Add tests for intent/entity fallback correctness
+  - [ ] Add eval set for intent/entity accuracy
+  - [ ] Deliverable: robust preprocessing pipeline with measurable quality and graceful degradation

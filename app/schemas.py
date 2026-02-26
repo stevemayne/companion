@@ -76,3 +76,9 @@ class SessionActivity(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: int = Field(ge=0)
+
+
+class PreprocessResult(BaseModel):
+    intent: str
+    emotion: str
+    entities: list[str] = Field(default_factory=list)
