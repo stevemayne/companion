@@ -7,6 +7,7 @@ from threading import Lock
 from typing import Protocol
 from uuid import UUID
 
+from app.analysis import ExtractionOutcome
 from app.schemas import GraphRelation, MemoryItem, MemoryKind, Message, MonologueState
 
 
@@ -35,6 +36,16 @@ class MonologueStore(Protocol):
     def upsert(self, state: MonologueState) -> MonologueState: ...
 
 
+class FactExtractor(Protocol):
+    def extract(
+        self,
+        *,
+        chat_session_id: UUID,
+        user_message: str,
+        assistant_message: str,
+    ) -> ExtractionOutcome: ...
+
+
 class BackgroundAgentDispatcher:
     def __init__(
         self,
@@ -43,12 +54,14 @@ class BackgroundAgentDispatcher:
         vector_store: VectorStore,
         graph_store: GraphStore,
         monologue_store: MonologueStore,
+        fact_extractor: FactExtractor,
         enabled: bool = True,
     ) -> None:
         self._episodic_store = episodic_store
         self._vector_store = vector_store
         self._graph_store = graph_store
         self._monologue_store = monologue_store
+        self._fact_extractor = fact_extractor
         self._enabled = enabled
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="aether-agents")
         self._lock = Lock()
@@ -90,14 +103,6 @@ class BackgroundAgentDispatcher:
         self, chat_session_id: UUID, user_message: str, assistant_message: str
     ) -> None:
         try:
-            self._vector_store.upsert_memory(
-                MemoryItem(
-                    chat_session_id=chat_session_id,
-                    kind=MemoryKind.SEMANTIC,
-                    content=assistant_message,
-                    score=0.8,
-                )
-            )
             entities = self._extract_entities(f"{user_message} {assistant_message}")
             for entity in entities:
                 self._graph_store.upsert_relation(
@@ -108,6 +113,21 @@ class BackgroundAgentDispatcher:
                         target=entity,
                     )
                 )
+
+            outcome = self._fact_extractor.extract(
+                chat_session_id=chat_session_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+            )
+            for fact in outcome.facts:
+                self._vector_store.upsert_memory(
+                    MemoryItem(
+                        chat_session_id=chat_session_id,
+                        kind=MemoryKind.SEMANTIC,
+                        content=fact,
+                    )
+                )
+
             self._increment(chat_session_id=chat_session_id, extraction_jobs=1)
         except Exception:
             self._increment(chat_session_id=chat_session_id, failures=1)

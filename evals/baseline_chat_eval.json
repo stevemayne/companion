@@ -17,13 +17,12 @@
     ]
   },
   {
-    "name": "semantic_recall_on_follow_up",
+    "name": "graph_recall_on_follow_up",
     "messages": [
       "I argued with Sarah yesterday.",
       "I am nervous to see Sarah tonight."
     ],
     "must_contain": [
-      "Relevant memories:",
       "I argued with Sarah yesterday.",
       "user-MENTIONED_IN_SESSION->Sarah"
     ]

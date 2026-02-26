@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 
 from app.agents import BackgroundAgentDispatcher
-from app.analysis import IntentAnalyzer, build_intent_analyzer
+from app.analysis import IntentAnalyzer, build_fact_extractor, build_intent_analyzer
 from app.api_models import (
     ChatRequest,
     ChatResponse,
@@ -408,13 +408,6 @@ class CognitiveOrchestrator:
         return updated
 
     def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
-        semantic_item = MemoryItem(
-            chat_session_id=message.chat_session_id,
-            kind=MemoryKind.SEMANTIC,
-            content=message.content,
-            score=1.0,
-        )
-        self.vector_store.upsert_memory(semantic_item)
         graph_writes: list[str] = []
         for entity in preprocess.entities:
             relation = GraphRelation(
@@ -437,7 +430,7 @@ class CognitiveOrchestrator:
         )
         self.monologue_store.upsert(monologue_state)
         return {
-            "semantic_upserts": [semantic_item.content],
+            "semantic_upserts": [],
             "graph_upserts": graph_writes,
             "monologue": monologue_state.internal_monologue,
         }
@@ -636,11 +629,14 @@ def build_container(settings: Settings) -> AppContainer:
         graph_store = InMemoryGraphStore()
         seed_store = InMemorySeedContextStore()
 
+    fact_extractor = build_fact_extractor(settings)
+
     agent_dispatcher = BackgroundAgentDispatcher(
         episodic_store=episodic_store,
         vector_store=vector_store,
         graph_store=graph_store,
         monologue_store=monologue_store,
+        fact_extractor=fact_extractor,
         enabled=settings.enable_background_agents,
     )
 

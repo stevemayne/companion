@@ -40,7 +40,7 @@ def test_orchestrator_persists_monologue_per_session() -> None:
     assert "Sarah" in persisted.internal_monologue
 
 
-def test_orchestrator_uses_semantic_and_graph_context_on_follow_up() -> None:
+def test_orchestrator_uses_graph_context_on_follow_up() -> None:
     app = create_app()
     client = TestClient(app)
     session_id = str(uuid4())
@@ -58,11 +58,10 @@ def test_orchestrator_uses_semantic_and_graph_context_on_follow_up() -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     content = second.json()["assistant_message"]["content"]
-    # Context is now in the system message within the structured messages array.
-    # The mock response from turn 1 may also appear in semantic memories (via
-    # the background extraction agent), so we check for substring presence
-    # rather than an exact prefix match.
-    assert "Relevant memories:" in content
-    assert "I argued with Sarah yesterday." in content
+    # Raw messages are no longer stored in the vector store (to prevent the
+    # model copying its own earlier responses).  Graph entity relations and
+    # the internal monologue still carry forward.
     assert "user-MENTIONED_IN_SESSION->Sarah" in content
     assert "Internal reflection: Focus on a neutral user" in content
+    # Conversation history includes the earlier user message.
+    assert "I argued with Sarah yesterday." in content
