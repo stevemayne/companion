@@ -319,15 +319,27 @@ class CognitiveOrchestrator:
         return assistant_message, trace
 
     def _graph_context(self, *, chat_session_id: UUID, entities: list[str]) -> list[GraphRelation]:
-        related: list[GraphRelation] = []
+        # Pass 1: expand entity set through ALSO_KNOWN_AS aliases
+        all_entities: set[str] = set(entities)
         for entity in entities:
-            related.extend(
-                self.graph_store.get_related(
-                    chat_session_id=chat_session_id,
-                    entity=entity,
-                    limit=3,
-                )
-            )
+            for rel in self.graph_store.get_related(
+                chat_session_id=chat_session_id, entity=entity, limit=10,
+            ):
+                if rel.relation == "ALSO_KNOWN_AS":
+                    all_entities.add(rel.source)
+                    all_entities.add(rel.target)
+
+        # Pass 2: fetch all relations for the expanded entity set, deduped
+        related: list[GraphRelation] = []
+        seen: set[tuple[str, str, str]] = set()
+        for entity in all_entities:
+            for rel in self.graph_store.get_related(
+                chat_session_id=chat_session_id, entity=entity, limit=5,
+            ):
+                key = (rel.source.lower(), rel.relation, rel.target.lower())
+                if key not in seen:
+                    seen.add(key)
+                    related.append(rel)
         return related
 
     def _assemble_messages(
@@ -408,8 +420,23 @@ class CognitiveOrchestrator:
         return updated
 
     def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
+        # Merge LLM-provided entities with a heuristic safety net so that
+        # MENTIONED_IN_SESSION relations are always written even when the LLM
+        # analysis returns an empty entity list.
+        heuristic_entities: list[str] = [
+            token.strip(",.!?;:()[]{}\"'")
+            for token in message.content.split()
+            if token[:1].isupper() and len(token.strip(",.!?;:()[]{}\"'")) > 1
+        ]
+        merged: list[str] = list(preprocess.entities)
+        seen = {e.lower() for e in merged}
+        for entity in heuristic_entities:
+            if entity.lower() not in seen:
+                seen.add(entity.lower())
+                merged.append(entity)
+
         graph_writes: list[str] = []
-        for entity in preprocess.entities:
+        for entity in merged:
             relation = GraphRelation(
                 chat_session_id=message.chat_session_id,
                 source="user",
@@ -491,10 +518,12 @@ class ChatService:
         self.episodic_store.append_message(user_message)
 
         assistant_message, trace = self.orchestrator.handle_turn(user_message)
+        seed_context = self.seed_store.get(chat_session_id=request.chat_session_id)
         self.agent_dispatcher.enqueue_turn(
             chat_session_id=request.chat_session_id,
             user_message=user_message.content,
             assistant_message=assistant_message.content,
+            companion_name=seed_context.seed.companion_name if seed_context else None,
         )
 
         if cache_key is not None:
@@ -637,6 +666,7 @@ def build_container(settings: Settings) -> AppContainer:
         graph_store=graph_store,
         monologue_store=monologue_store,
         fact_extractor=fact_extractor,
+        debug_store=debug_store,
         enabled=settings.enable_background_agents,
     )
 

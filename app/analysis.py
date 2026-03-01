@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Literal, Protocol
 from uuid import UUID
@@ -225,12 +225,47 @@ _SENTENCE_SPLIT = re.compile(r"[.!?]+")
 
 
 @dataclass(frozen=True)
+class ExtractedFact:
+    subject: str
+    predicate: str
+    object: str
+    text: str
+
+
+@dataclass(frozen=True)
+class EntityMention:
+    name: str
+    relationship: str
+    aliases: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ExtractionOutcome:
-    facts: list[str]
+    facts: list[ExtractedFact]
     requested_provider: str
     used_provider: str
     fallback_reason: str | None
     latency_ms: float
+    entities: list[EntityMention] = field(default_factory=list)
+
+
+def validate_facts(
+    facts: list[ExtractedFact],
+    companion_name: str | None = None,
+) -> list[ExtractedFact]:
+    valid: list[ExtractedFact] = []
+    companion_lower = companion_name.strip().lower() if companion_name else None
+    seen_texts: set[str] = set()
+    for fact in facts:
+        if not fact.subject.strip() or not fact.text.strip():
+            continue
+        if companion_lower and fact.subject.strip().lower() == companion_lower:
+            continue
+        if fact.text in seen_texts:
+            continue
+        seen_texts.add(fact.text)
+        valid.append(fact)
+    return valid
 
 
 class FactExtractor(Protocol):
@@ -240,6 +275,7 @@ class FactExtractor(Protocol):
         chat_session_id: UUID,
         user_message: str,
         assistant_message: str,
+        companion_name: str | None = None,
     ) -> ExtractionOutcome: ...
 
 
@@ -250,10 +286,12 @@ class HeuristicFactExtractor:
         chat_session_id: UUID,
         user_message: str,
         assistant_message: str,
+        companion_name: str | None = None,
     ) -> ExtractionOutcome:
         del chat_session_id, assistant_message
         start = perf_counter()
-        facts: list[str] = []
+        facts: list[ExtractedFact] = []
+        seen_texts: set[str] = set()
         sentences = [s.strip() for s in _SENTENCE_SPLIT.split(user_message) if s.strip()]
         for sentence in sentences:
             if "?" in sentence:
@@ -261,9 +299,11 @@ class HeuristicFactExtractor:
             if len(sentence.split()) < 3:
                 continue
             if _FIRST_PERSON.search(sentence):
-                fact = _to_declarative(sentence)
-                if fact and fact not in facts:
-                    facts.append(fact)
+                text = _to_declarative(sentence)
+                if text and text not in seen_texts:
+                    seen_texts.add(text)
+                    facts.append(ExtractedFact(subject="User", predicate="", object="", text=text))
+        facts = validate_facts(facts, companion_name)
         return ExtractionOutcome(
             facts=facts,
             requested_provider="heuristic",
@@ -284,28 +324,32 @@ class LLMFactExtractor:
         chat_session_id: UUID,
         user_message: str,
         assistant_message: str,
+        companion_name: str | None = None,
     ) -> ExtractionOutcome:
         start = perf_counter()
         try:
             raw = self._provider.generate(
                 chat_session_id=chat_session_id,
                 messages=[
-                    {"role": "user", "content": self._extraction_prompt(user_message, assistant_message)},
+                    {"role": "user", "content": self._extraction_prompt(user_message, assistant_message, companion_name)},
                 ],
             )
-            facts = _parse_facts_payload(raw)
+            facts, entities = _parse_extraction_payload(raw)
+            facts = validate_facts(facts, companion_name)
             return ExtractionOutcome(
                 facts=facts,
                 requested_provider="llm",
                 used_provider="llm",
                 fallback_reason=None,
                 latency_ms=(perf_counter() - start) * 1000,
+                entities=entities,
             )
         except Exception as exc:  # noqa: BLE001
             fallback = self._fallback.extract(
                 chat_session_id=chat_session_id,
                 user_message=user_message,
                 assistant_message=assistant_message,
+                companion_name=companion_name,
             )
             return ExtractionOutcome(
                 facts=fallback.facts,
@@ -315,22 +359,51 @@ class LLMFactExtractor:
                 latency_ms=(perf_counter() - start) * 1000,
             )
 
-    def _extraction_prompt(self, user_message: str, assistant_message: str) -> str:
+    def _extraction_prompt(self, user_message: str, assistant_message: str, companion_name: str | None) -> str:
+        companion_rule = ""
+        if companion_name:
+            companion_rule = (
+                f"- The assistant in this conversation is named '{companion_name}'. "
+                f"'{companion_name}' must NEVER appear as a fact subject. "
+                f"If '{companion_name}' is involved, place them in the object field.\n"
+            )
         return (
-            "You are a fact extraction system. Given a user message and an assistant "
-            "response from a conversation, extract factual information about the user "
-            "as short declarative sentences.\n\n"
-            "Rules:\n"
-            "- Each fact should be a single short sentence about the user.\n"
+            "You are a fact and entity extraction system. Given a user message and an "
+            "assistant response, extract two things:\n\n"
+            "1. **facts** — structured triples about the user.\n"
+            "2. **entities** — named people, pets, or organizations mentioned.\n\n"
+            "## Fact rules\n"
+            "- Each fact must have: subject, predicate, object, text.\n"
+            "- subject: who performs the action (usually 'User').\n"
+            "- predicate: the verb phrase ('argued with', 'is interested in', 'has').\n"
+            "- object: the target of the action ('Sarah', 'magic', 'a cat named Luna').\n"
+            "- text: a short declarative sentence rendering of the triple.\n"
             "- Focus on: personal details, preferences, relationships, events, "
             "emotions, plans, and opinions.\n"
-            "- Write facts in third person (e.g., 'User's name is George', "
-            "'User argued with Sarah yesterday').\n"
+            "- Pay careful attention to WHO does WHAT to WHOM. Preserve the direction "
+            "of the relationship exactly as stated.\n"
+            f"{companion_rule}"
             "- Do NOT extract facts about the assistant or general knowledge.\n"
-            "- Do NOT include greetings, filler, or questions.\n"
-            "- If there are no extractable facts, return an empty array.\n\n"
-            "Return strict JSON: a single array of strings.\n"
-            'Example: ["User\'s name is George", "User is interested in magic"]\n\n'
+            "- Do NOT include greetings, filler, or questions.\n\n"
+            "## Entity rules\n"
+            "- Each entity must have: name (canonical form), relationship (to the user: "
+            "'sister', 'boss', 'friend', 'pet', 'coworker', etc. — empty string if "
+            "unknown), aliases (nicknames or alternate names, empty array if none).\n"
+            "- Only extract entities that are people, pets, or organizations — not "
+            "abstract concepts or places.\n\n"
+            "## Output format\n"
+            "Return strict JSON: a single object with keys 'facts' and 'entities'.\n\n"
+            "Example:\n"
+            '  User says "My sister Sarah, we call her sis, started a new job."\n'
+            "  {\n"
+            '    "facts": [\n'
+            '      {"subject": "User", "predicate": "has sister who started", '
+            '"object": "a new job", "text": "User\'s sister Sarah started a new job"}\n'
+            "    ],\n"
+            '    "entities": [\n'
+            '      {"name": "Sarah", "relationship": "sister", "aliases": ["sis"]}\n'
+            "    ]\n"
+            "  }\n\n"
             f"User message: {user_message}\n"
             f"Assistant response: {assistant_message}"
         )
@@ -361,31 +434,85 @@ def _to_declarative(sentence: str) -> str:
     text = re.sub(r"\bI'm\b", "user is", text)
     text = re.sub(r"\bI\b", "user", text)
     text = re.sub(r"\b[Mm]y\b", "user's", text)
+    text = re.sub(r"\bme\b", "user", text)
+    text = re.sub(r"\bmyself\b", "user", text)
+    text = re.sub(r"\bmine\b", "user's", text)
     if text:
         text = text[0].upper() + text[1:]
     return text
 
 
-def _parse_facts_payload(raw: str) -> list[str]:
+def _parse_extraction_payload(raw: str) -> tuple[list[ExtractedFact], list[EntityMention]]:
     candidate = raw.strip()
-    fenced = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", candidate, flags=re.DOTALL)
+    # Try fenced JSON (array or object)
+    fenced = re.search(r"```(?:json)?\s*([\[{].*?[}\]])\s*```", candidate, flags=re.DOTALL)
     if fenced:
         candidate = fenced.group(1)
     else:
-        start = candidate.find("[")
-        end = candidate.rfind("]")
-        if start >= 0 and end > start:
-            candidate = candidate[start : end + 1]
+        # Find outermost JSON structure
+        obj_start = candidate.find("{")
+        arr_start = candidate.find("[")
+        if obj_start >= 0 and (arr_start < 0 or obj_start < arr_start):
+            end = candidate.rfind("}")
+            if end > obj_start:
+                candidate = candidate[obj_start : end + 1]
+        elif arr_start >= 0:
+            end = candidate.rfind("]")
+            if end > arr_start:
+                candidate = candidate[arr_start : end + 1]
     try:
         data = json.loads(candidate)
     except json.JSONDecodeError as exc:
         raise ValueError("Invalid JSON returned by fact extraction model.") from exc
-    if not isinstance(data, list):
-        raise ValueError("Fact extraction model did not return a JSON array.")
-    facts: list[str] = []
-    for item in data:
-        if isinstance(item, str):
+
+    if isinstance(data, dict):
+        facts_raw = data.get("facts", [])
+        entities_raw = data.get("entities", [])
+    elif isinstance(data, list):
+        facts_raw = data
+        entities_raw = []
+    else:
+        raise ValueError("Fact extraction model did not return a JSON object or array.")
+
+    facts = _parse_facts_list(facts_raw)
+    entities = _parse_entities_list(entities_raw)
+    return facts, entities
+
+
+def _parse_facts_list(items: list) -> list[ExtractedFact]:
+    facts: list[ExtractedFact] = []
+    seen_texts: set[str] = set()
+    for item in items:
+        if isinstance(item, dict):
+            subject = str(item.get("subject", "")).strip()
+            predicate = str(item.get("predicate", "")).strip()
+            obj = str(item.get("object", "")).strip()
+            text = str(item.get("text", "")).strip()
+            if not text:
+                text = f"{subject} {predicate} {obj}".strip()
+            if text and subject and text not in seen_texts:
+                seen_texts.add(text)
+                facts.append(ExtractedFact(subject=subject, predicate=predicate, object=obj, text=text))
+        elif isinstance(item, str):
             cleaned = item.strip()
-            if cleaned and cleaned not in facts:
-                facts.append(cleaned)
+            if cleaned and cleaned not in seen_texts:
+                seen_texts.add(cleaned)
+                facts.append(ExtractedFact(subject="User", predicate="", object="", text=cleaned))
     return facts
+
+
+def _parse_entities_list(items: list) -> list[EntityMention]:
+    entities: list[EntityMention] = []
+    seen_names: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name or name.lower() in seen_names:
+            continue
+        seen_names.add(name.lower())
+        relationship = str(item.get("relationship", "")).strip()
+        raw_aliases = item.get("aliases", [])
+        aliases = [str(a).strip() for a in raw_aliases if isinstance(a, str) and str(a).strip()]
+        entities.append(EntityMention(name=name, relationship=relationship, aliases=aliases))
+    return entities

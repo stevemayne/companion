@@ -64,11 +64,39 @@ export function DebugPanel(props: DebugPanelProps) {
           <div className="messages" style={{ maxHeight: 260 }}>
             {traces.length === 0 && <div className="meta">No traces for this session yet.</div>}
             {traces.map((trace) => {
-              const turnTrace = trace.turn_trace as Record<string, unknown>;
-              const prompt = turnTrace.prompt as Record<string, unknown> | undefined;
-              const preprocess = turnTrace.preprocess as Record<string, unknown> | undefined;
-              const retrieval = turnTrace.retrieval as Record<string, unknown> | undefined;
-              const writes = turnTrace.writes as Record<string, unknown> | undefined;
+              const raw = trace as Record<string, unknown>;
+              const isAgentTrace = "agent" in raw && !("turn_trace" in raw);
+
+              if (isAgentTrace) {
+                const facts = raw.facts as string[] | undefined;
+                return (
+                  <div key={trace.trace_id} className="message system">
+                    <div className="meta">trace_id: {trace.trace_id}</div>
+                    <div className="meta">agent: {String(raw.agent)}</div>
+                    <div className="meta">
+                      provider: {String(raw.provider)}
+                      {raw.fallback_reason ? ` (fallback: ${String(raw.fallback_reason)})` : ""}
+                    </div>
+                    {raw.latency_ms != null && (
+                      <div className="meta">latency: {String(raw.latency_ms)}ms</div>
+                    )}
+                    {facts && facts.length > 0 && (
+                      <div className="meta">
+                        facts:{facts.map((f, i) => <div key={i}>  - {f}</div>)}
+                      </div>
+                    )}
+                    {facts && facts.length === 0 && (
+                      <div className="meta">facts: (none extracted)</div>
+                    )}
+                  </div>
+                );
+              }
+
+              const turnTrace = raw.turn_trace as Record<string, unknown> | undefined;
+              const prompt = turnTrace?.prompt as Record<string, unknown> | undefined;
+              const preprocess = turnTrace?.preprocess as Record<string, unknown> | undefined;
+              const retrieval = turnTrace?.retrieval as Record<string, unknown> | undefined;
+              const writes = turnTrace?.writes as Record<string, unknown> | undefined;
               return (
                 <div key={trace.trace_id} className="message assistant">
                   <div className="meta">trace_id: {trace.trace_id}</div>

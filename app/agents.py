@@ -8,6 +8,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.analysis import ExtractionOutcome
+from app.debug_trace import DebugTraceStore, build_trace_base
 from app.schemas import GraphRelation, MemoryItem, MemoryKind, Message, MonologueState
 
 
@@ -43,6 +44,7 @@ class FactExtractor(Protocol):
         chat_session_id: UUID,
         user_message: str,
         assistant_message: str,
+        companion_name: str | None = None,
     ) -> ExtractionOutcome: ...
 
 
@@ -55,6 +57,7 @@ class BackgroundAgentDispatcher:
         graph_store: GraphStore,
         monologue_store: MonologueStore,
         fact_extractor: FactExtractor,
+        debug_store: DebugTraceStore,
         enabled: bool = True,
     ) -> None:
         self._episodic_store = episodic_store
@@ -62,6 +65,7 @@ class BackgroundAgentDispatcher:
         self._graph_store = graph_store
         self._monologue_store = monologue_store
         self._fact_extractor = fact_extractor
+        self._debug_store = debug_store
         self._enabled = enabled
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="aether-agents")
         self._lock = Lock()
@@ -69,7 +73,12 @@ class BackgroundAgentDispatcher:
         self._futures: set[Future[None]] = set()
 
     def enqueue_turn(
-        self, *, chat_session_id: UUID, user_message: str, assistant_message: str
+        self,
+        *,
+        chat_session_id: UUID,
+        user_message: str,
+        assistant_message: str,
+        companion_name: str | None = None,
     ) -> None:
         if not self._enabled:
             return
@@ -78,6 +87,7 @@ class BackgroundAgentDispatcher:
             chat_session_id,
             user_message,
             assistant_message,
+            companion_name,
         )
         self._submit(self._run_reflector, chat_session_id)
 
@@ -100,7 +110,11 @@ class BackgroundAgentDispatcher:
         future.add_done_callback(_cleanup)
 
     def _run_extraction(
-        self, chat_session_id: UUID, user_message: str, assistant_message: str
+        self,
+        chat_session_id: UUID,
+        user_message: str,
+        assistant_message: str,
+        companion_name: str | None,
     ) -> None:
         try:
             entities = self._extract_entities(f"{user_message} {assistant_message}")
@@ -118,15 +132,54 @@ class BackgroundAgentDispatcher:
                 chat_session_id=chat_session_id,
                 user_message=user_message,
                 assistant_message=assistant_message,
+                companion_name=companion_name,
             )
             for fact in outcome.facts:
                 self._vector_store.upsert_memory(
                     MemoryItem(
                         chat_session_id=chat_session_id,
                         kind=MemoryKind.SEMANTIC,
-                        content=fact,
+                        content=fact.text,
                     )
                 )
+
+            for em in outcome.entities:
+                if em.relationship:
+                    self._graph_store.upsert_relation(
+                        GraphRelation(
+                            chat_session_id=chat_session_id,
+                            source="user",
+                            relation=f"HAS_{em.relationship.upper().replace(' ', '_')}",
+                            target=em.name,
+                        )
+                    )
+                for alias in em.aliases:
+                    self._graph_store.upsert_relation(
+                        GraphRelation(
+                            chat_session_id=chat_session_id,
+                            source=em.name,
+                            relation="ALSO_KNOWN_AS",
+                            target=alias,
+                        )
+                    )
+
+            trace = build_trace_base(chat_session_id=chat_session_id)
+            trace.update({
+                "agent": "extraction",
+                "provider": outcome.used_provider,
+                "fallback_reason": outcome.fallback_reason,
+                "latency_ms": round(outcome.latency_ms, 2),
+                "facts": [f.text for f in outcome.facts],
+                "structured_facts": [
+                    {"subject": f.subject, "predicate": f.predicate, "object": f.object, "text": f.text}
+                    for f in outcome.facts
+                ],
+                "entities": [
+                    {"name": e.name, "relationship": e.relationship, "aliases": e.aliases}
+                    for e in outcome.entities
+                ],
+            })
+            self._debug_store.add_trace(chat_session_id=chat_session_id, trace=trace)
 
             self._increment(chat_session_id=chat_session_id, extraction_jobs=1)
         except Exception:

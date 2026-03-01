@@ -1,0 +1,114 @@
+[
+  {
+    "name": "simple_self_statement",
+    "user_message": "I'm interested in magic.",
+    "assistant_message": "That's really cool! What kind of magic?",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "predicate": "is interested in", "object": "magic", "text": "User is interested in magic"}
+    ]
+  },
+  {
+    "name": "user_as_object",
+    "user_message": "Sarah yelled at me yesterday.",
+    "assistant_message": "That sounds really tough. What happened?",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "predicate": "was yelled at by", "object": "Sarah", "text_contains": "yelled at"}
+    ],
+    "must_not_have_subject": ["Sarah"]
+  },
+  {
+    "name": "companion_excluded_from_subject",
+    "user_message": "I told Ari about my day.",
+    "assistant_message": "Thanks for sharing that with me!",
+    "companion_name": "Ari",
+    "expected_facts": [
+      {"subject": "User", "predicate": "told", "object": "Ari", "text_contains": "told"}
+    ],
+    "must_not_have_subject": ["Ari"]
+  },
+  {
+    "name": "multiple_facts",
+    "user_message": "I argued with Sarah yesterday. My brother is visiting next week.",
+    "assistant_message": "That sounds like a lot going on!",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "predicate": "argued with", "object": "Sarah", "text_contains": "argued"},
+      {"subject": "User", "text_contains": "brother"}
+    ]
+  },
+  {
+    "name": "no_facts_from_greeting",
+    "user_message": "Hey! How are you?",
+    "assistant_message": "I'm doing well, thanks for asking!",
+    "companion_name": null,
+    "expected_facts": [],
+    "expected_entities": []
+  },
+  {
+    "name": "user_preference",
+    "user_message": "I love hiking in the mountains.",
+    "assistant_message": "Mountain hiking is wonderful!",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "predicate": "loves", "text_contains": "hiking"}
+    ]
+  },
+  {
+    "name": "relationship_direction_preserved",
+    "user_message": "My boss criticized my work today.",
+    "assistant_message": "That must have been difficult to hear.",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "text_contains": "boss"}
+    ],
+    "must_not_have_subject": ["boss", "Boss"]
+  },
+  {
+    "name": "companion_action_not_attributed_to_user",
+    "user_message": "You really helped me feel better last time.",
+    "assistant_message": "I'm glad I could help!",
+    "companion_name": "Ari",
+    "expected_facts": [
+      {"subject": "User", "text_contains": "feel better"}
+    ],
+    "must_not_have_subject": ["Ari"]
+  },
+  {
+    "name": "sister_with_nickname",
+    "user_message": "My sister Sarah, we call her sis, is visiting next week.",
+    "assistant_message": "That sounds exciting!",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "text_contains": "sister"}
+    ],
+    "expected_entities": [
+      {"name": "Sarah", "relationship": "sister", "aliases": ["sis"]}
+    ]
+  },
+  {
+    "name": "boss_with_title",
+    "user_message": "My boss Mr. Johnson gave me a raise today.",
+    "assistant_message": "Congratulations!",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "text_contains": "raise"}
+    ],
+    "expected_entities": [
+      {"name": "Mr. Johnson", "relationship": "boss"}
+    ]
+  },
+  {
+    "name": "pet_mention",
+    "user_message": "I took my cat Luna to the vet today.",
+    "assistant_message": "I hope Luna is doing well!",
+    "companion_name": null,
+    "expected_facts": [
+      {"subject": "User", "text_contains": "vet"}
+    ],
+    "expected_entities": [
+      {"name": "Luna", "relationship": "pet"}
+    ]
+  }
+]
