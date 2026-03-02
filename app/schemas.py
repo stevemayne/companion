@@ -48,9 +48,21 @@ class GraphRelation(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
+class CompanionAffect(BaseModel):
+    mood: str = Field(default="curious")
+    valence: float = Field(default=0.1, ge=-1.0, le=1.0)
+    arousal: float = Field(default=0.3, ge=0.0, le=1.0)
+    comfort_level: float = Field(default=3.0, ge=0.0, le=10.0)
+    trust: float = Field(default=3.0, ge=0.0, le=10.0)
+    attraction: float = Field(default=3.0, ge=0.0, le=10.0)
+    engagement: float = Field(default=5.0, ge=0.0, le=10.0)
+    recent_triggers: list[str] = Field(default_factory=list)
+
+
 class MonologueState(BaseModel):
     chat_session_id: UUID
     internal_monologue: str = Field(default="")
+    affect: CompanionAffect = Field(default_factory=CompanionAffect)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

@@ -125,6 +125,19 @@ export function DebugPanel(props: DebugPanelProps) {
                       prompt: {showRawPrompt ? String(prompt.raw ?? "") : String(prompt.summary ?? "")}
                     </div>
                   )}
+                  {writes?.affect != null && (
+                    <div className="meta">
+                      affect: mood={String((writes.affect as Record<string, unknown>).mood)}
+                      {" "}valence={String((writes.affect as Record<string, unknown>).valence)}
+                      {" "}trust={String((writes.affect as Record<string, unknown>).trust)}
+                      {" "}comfort={String((writes.affect as Record<string, unknown>).comfort_level)}
+                      {" "}engagement={String((writes.affect as Record<string, unknown>).engagement)}
+                      {(() => {
+                        const triggers = (writes.affect as Record<string, unknown>).recent_triggers as string[] | undefined;
+                        return triggers && triggers.length > 0 ? ` triggers=[${triggers.join("; ")}]` : "";
+                      })()}
+                    </div>
+                  )}
                   {verbose && writes && (
                     <div className="meta">writes: {JSON.stringify(writes)}</div>
                   )}

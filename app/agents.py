@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -9,7 +11,14 @@ from uuid import UUID
 
 from app.analysis import ExtractionOutcome
 from app.debug_trace import DebugTraceStore, build_trace_base
-from app.schemas import GraphRelation, MemoryItem, MemoryKind, Message, MonologueState
+from app.schemas import (
+    CompanionAffect,
+    GraphRelation,
+    MemoryItem,
+    MemoryKind,
+    Message,
+    MonologueState,
+)
 
 
 @dataclass
@@ -48,6 +57,12 @@ class FactExtractor(Protocol):
     ) -> ExtractionOutcome: ...
 
 
+class AffectRefiner(Protocol):
+    def generate(
+        self, *, chat_session_id: UUID, messages: list[dict[str, str]]
+    ) -> str: ...
+
+
 class BackgroundAgentDispatcher:
     def __init__(
         self,
@@ -57,6 +72,7 @@ class BackgroundAgentDispatcher:
         graph_store: GraphStore,
         monologue_store: MonologueStore,
         fact_extractor: FactExtractor,
+        affect_refiner: AffectRefiner | None = None,
         debug_store: DebugTraceStore,
         enabled: bool = True,
     ) -> None:
@@ -65,9 +81,12 @@ class BackgroundAgentDispatcher:
         self._graph_store = graph_store
         self._monologue_store = monologue_store
         self._fact_extractor = fact_extractor
+        self._affect_refiner = affect_refiner
         self._debug_store = debug_store
         self._enabled = enabled
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="aether-agents")
+        self._executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="aether-agents",
+        )
         self._lock = Lock()
         self._metrics: dict[UUID, AgentMetrics] = {}
         self._futures: set[Future[None]] = set()
@@ -176,23 +195,91 @@ class BackgroundAgentDispatcher:
 
     def _run_reflector(self, chat_session_id: UUID) -> None:
         try:
-            recent = self._episodic_store.get_recent_messages(
+            current = self._monologue_store.get(
                 chat_session_id=chat_session_id,
-                limit=6,
             )
-            summary = " | ".join(f"{msg.role}:{msg.content}" for msg in recent[-3:]) or "none"
-            current = self._monologue_store.get(chat_session_id=chat_session_id)
-            prefix = current.internal_monologue if current is not None else ""
-            combined = f"{prefix} | reflector_summary={summary}".strip(" |")
+            current_affect = (
+                current.affect if current is not None else CompanionAffect()
+            )
+            current_monologue = (
+                current.internal_monologue if current is not None else ""
+            )
+
+            if self._affect_refiner is not None:
+                recent = self._episodic_store.get_recent_messages(
+                    chat_session_id=chat_session_id,
+                    limit=6,
+                )
+                if recent:
+                    refined = self._llm_refine_affect(
+                        chat_session_id=chat_session_id,
+                        recent_messages=recent,
+                        current_affect=current_affect,
+                    )
+                else:
+                    refined = current_affect
+            else:
+                refined = current_affect
+
             self._monologue_store.upsert(
                 MonologueState(
                     chat_session_id=chat_session_id,
-                    internal_monologue=combined,
+                    internal_monologue=current_monologue,
+                    affect=refined,
                 )
             )
-            self._increment(chat_session_id=chat_session_id, reflector_jobs=1)
+            self._increment(
+                chat_session_id=chat_session_id, reflector_jobs=1,
+            )
         except Exception:
-            self._increment(chat_session_id=chat_session_id, failures=1)
+            self._increment(
+                chat_session_id=chat_session_id, failures=1,
+            )
+
+    def _llm_refine_affect(
+        self,
+        *,
+        chat_session_id: UUID,
+        recent_messages: list[Message],
+        current_affect: CompanionAffect,
+    ) -> CompanionAffect:
+        """Call the analysis LLM to refine companion affect state."""
+        conversation_excerpt = "\n".join(
+            f"{msg.role.upper()}: {msg.content}"
+            for msg in recent_messages[-6:]
+        )
+        current_json = current_affect.model_dump_json()
+        prompt = (
+            "You are an affect-state analyser for a companion AI. "
+            "Given the recent conversation and the companion's current "
+            "internal state, return a revised affect state as strict "
+            "JSON.\n\n"
+            "## Current companion affect\n"
+            f"{current_json}\n\n"
+            "## Recent conversation\n"
+            f"{conversation_excerpt}\n\n"
+            "## Output format\n"
+            "Return a single JSON object with exactly these keys:\n"
+            "  mood (string — one of: curious, wary, anxious, amused, "
+            "frustrated, concerned, excited, hurt, withdrawn, fond, "
+            "playful)\n"
+            "  valence (float -1.0 to 1.0)\n"
+            "  arousal (float 0.0 to 1.0)\n"
+            "  comfort_level (float 0 to 10)\n"
+            "  trust (float 0 to 10)\n"
+            "  attraction (float 0 to 10)\n"
+            "  engagement (float 0 to 10)\n"
+            "  recent_triggers (list of up to 3 short strings explaining "
+            "what changed)\n\n"
+            "Adjust values modestly — this is a refinement, not a reset. "
+            "Return only JSON, no explanation."
+        )
+        assert self._affect_refiner is not None
+        raw = self._affect_refiner.generate(
+            chat_session_id=chat_session_id,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return _parse_affect_response(raw, fallback=current_affect)
 
     def _increment(
         self,
@@ -207,4 +294,26 @@ class BackgroundAgentDispatcher:
             metrics.extraction_jobs += extraction_jobs
             metrics.reflector_jobs += reflector_jobs
             metrics.failures += failures
+
+
+def _parse_affect_response(
+    raw: str, *, fallback: CompanionAffect,
+) -> CompanionAffect:
+    """Parse LLM-returned affect JSON, returning fallback on any error."""
+    candidate = raw.strip()
+    fenced = re.search(
+        r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.DOTALL,
+    )
+    if fenced:
+        candidate = fenced.group(1)
+    else:
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start >= 0 and end > start:
+            candidate = candidate[start : end + 1]
+    try:
+        data = json.loads(candidate)
+        return CompanionAffect.model_validate(data)
+    except Exception:
+        return fallback
 

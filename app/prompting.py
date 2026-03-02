@@ -25,7 +25,8 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
         f"Relationship setup: {seed.relationship_setup}. "
         f"Traits to embody: {traits}. "
         f"Primary goals in this conversation: {goals}. "
-        "Maintain emotional continuity across turns and respond with gentle relational awareness."
+        "Your inner emotional state is provided each turn in the Session Context. "
+        "Let it guide your tone, warmth, and depth of engagement naturally."
     )
 
     if seed_context.user_description:

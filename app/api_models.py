@@ -5,7 +5,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas import CompanionSeed, GraphRelation, MemoryItem, Message, SessionSeedContext
+from app.schemas import (
+    CompanionAffect,
+    CompanionSeed,
+    GraphRelation,
+    MemoryItem,
+    Message,
+    SessionSeedContext,
+)
 
 
 class ChatRequest(BaseModel):
@@ -16,6 +23,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     chat_session_id: UUID
     assistant_message: Message
+    affect: CompanionAffect | None = None
     idempotency_replay: bool = False
     seed_version: int | None = None
 
@@ -37,6 +45,7 @@ class KnowledgeResponse(BaseModel):
     facts: list[MemoryItem]
     graph: list[GraphRelation]
     monologue: str | None = None
+    affect: CompanionAffect | None = None
 
 
 class SessionSummary(BaseModel):

@@ -1,9 +1,10 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { AffectPanel } from "./AffectPanel";
 import { fetchDebugTraces } from "./debugApi";
 import { DebugPanel } from "./DebugPanel";
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
-import { fetchKnowledge, GraphRelation, MemoryFact } from "./knowledgeApi";
+import { CompanionAffect, fetchKnowledge, GraphRelation, MemoryFact } from "./knowledgeApi";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { fetchMemory } from "./memoryApi";
 import { SeedPayload, upsertSeed } from "./seedApi";
@@ -133,6 +134,7 @@ export function App() {
   const [knowledgeFacts, setKnowledgeFacts] = useState<MemoryFact[]>([]);
   const [knowledgeGraph, setKnowledgeGraph] = useState<GraphRelation[]>([]);
   const [knowledgeMonologue, setKnowledgeMonologue] = useState<string | null>(null);
+  const [knowledgeAffect, setKnowledgeAffect] = useState<CompanionAffect | null>(null);
 
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
@@ -211,6 +213,7 @@ export function App() {
       setKnowledgeFacts(data.facts);
       setKnowledgeGraph(data.graph);
       setKnowledgeMonologue(data.monologue);
+      setKnowledgeAffect(data.affect);
       setKnowledgeStatus(`loaded`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
@@ -242,6 +245,7 @@ export function App() {
     setKnowledgeFacts([]);
     setKnowledgeGraph([]);
     setKnowledgeMonologue(null);
+    setKnowledgeAffect(null);
     setKnowledgeStatus("idle");
 
     try {
@@ -376,6 +380,7 @@ export function App() {
     setKnowledgeFacts([]);
     setKnowledgeGraph([]);
     setKnowledgeMonologue(null);
+    setKnowledgeAffect(null);
     setKnowledgeStatus("idle");
     await bootstrapSeed(newSessionId);
     await refreshSessions();
@@ -453,6 +458,8 @@ export function App() {
             monologue={knowledgeMonologue}
             status={knowledgeStatus}
           />
+
+          <AffectPanel affect={knowledgeAffect} />
 
           <div className="panel">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>

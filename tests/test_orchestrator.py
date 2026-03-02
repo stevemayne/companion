@@ -38,6 +38,10 @@ def test_orchestrator_persists_monologue_per_session() -> None:
     assert persisted is not None
     assert "anxious" in persisted.internal_monologue
     assert "Sarah" in persisted.internal_monologue
+    # Affect state should reflect the anxious user input
+    assert persisted.affect is not None
+    assert persisted.affect.mood != ""
+    assert persisted.affect.arousal > 0.3  # above default baseline
 
 
 def test_orchestrator_uses_graph_context_on_follow_up() -> None:
@@ -65,3 +69,5 @@ def test_orchestrator_uses_graph_context_on_follow_up() -> None:
     assert "Internal reflection: Focus on a neutral user" in content
     # Conversation history includes the earlier user message.
     assert "I argued with Sarah yesterday." in content
+    # Affect block should appear in the system prompt on the second turn
+    assert "Current mood:" in content

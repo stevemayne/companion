@@ -15,11 +15,23 @@ export type GraphRelation = {
   confidence: number;
 };
 
+export type CompanionAffect = {
+  mood: string;
+  valence: number;
+  arousal: number;
+  comfort_level: number;
+  trust: number;
+  attraction: number;
+  engagement: number;
+  recent_triggers: string[];
+};
+
 export type KnowledgeResponse = {
   chat_session_id: string;
   facts: MemoryFact[];
   graph: GraphRelation[];
   monologue: string | null;
+  affect: CompanionAffect | null;
 };
 
 export async function fetchKnowledge(chatSessionId: string): Promise<KnowledgeResponse> {

@@ -188,6 +188,81 @@ body {
   margin-bottom: 6px;
 }
 
+.affect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.affect-mood {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.affect-mood-label {
+  font-size: 18px;
+  font-weight: 600;
+  color: #174f72;
+  text-transform: capitalize;
+}
+
+.affect-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.affect-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.affect-bar-label {
+  width: 80px;
+  font-size: 12px;
+  color: #4d4f56;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.affect-bar-track {
+  flex: 1;
+  height: 10px;
+  background: #e8e5dd;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.affect-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.4s ease;
+}
+
+.affect-bar-value {
+  width: 32px;
+  font-size: 12px;
+  color: #4d4f56;
+  flex-shrink: 0;
+}
+
+.affect-triggers {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.affect-trigger-item {
+  font-size: 12px;
+  color: #4d4f56;
+  padding: 3px 8px;
+  background: #f6f4ee;
+  border-radius: 6px;
+  border-left: 3px solid #b5994a;
+}
+
 @media (max-width: 900px) {
   .app {
     padding: 12px;

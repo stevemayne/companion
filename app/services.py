@@ -30,7 +30,9 @@ from app.config import Settings
 from app.debug_trace import DebugTraceStore, build_trace_base, sanitize_debug_text
 from app.inference import build_inference_provider
 from app.prompting import build_companion_system_prompt
+from app.inference import EndpointConfig, OpenAICompatibleProvider
 from app.schemas import (
+    CompanionAffect,
     GraphRelation,
     MemoryItem,
     MemoryKind,
@@ -261,6 +263,139 @@ class InMemorySeedContextStore:
         return contexts[:limit]
 
 
+_HOSTILITY_TERMS = {"hate", "shut up", "stupid", "annoying", "useless", "idiot"}
+_WARMTH_TERMS = {"love", "trust", "appreciate", "grateful", "thank", "missed you", "care"}
+_WITHDRAWAL_TERMS = {"leave me alone", "don't want to talk", "go away", "whatever"}
+
+
+def _heuristic_affect_update(
+    *,
+    current: CompanionAffect,
+    emotion: str,
+    intent: str,
+    message_content: str,
+) -> CompanionAffect:
+    """Apply fast heuristic deltas to affect state. No LLM call."""
+    lowered = message_content.lower()
+
+    # Decay ~5% toward baseline each turn to prevent runaway states.
+    baseline_engagement = 5.0
+    decay = 0.05
+
+    engagement = current.engagement + decay * (baseline_engagement - current.engagement)
+    valence = current.valence * (1.0 - decay)
+    comfort_level = current.comfort_level
+    trust = current.trust
+    attraction = current.attraction
+    arousal = current.arousal
+    triggers: list[str] = []
+
+    # Emotion signals
+    if emotion == "anxious":
+        valence -= 0.1
+        arousal += 0.15
+        comfort_level = max(0.0, comfort_level - 0.3)
+        triggers.append("user expressed anxiety")
+    elif emotion == "positive":
+        valence += 0.1
+        engagement = min(10.0, engagement + 0.5)
+        triggers.append("user expressed positive feeling")
+
+    # Intent signals
+    if intent == "question":
+        engagement = min(10.0, engagement + 0.3)
+
+    # Lexical signals for interpersonal dynamics
+    if any(term in lowered for term in _HOSTILITY_TERMS):
+        valence -= 0.2
+        trust = max(0.0, trust - 0.5)
+        attraction = max(0.0, attraction - 0.3)
+        triggers.append("hostile language detected")
+    if any(term in lowered for term in _WARMTH_TERMS):
+        valence += 0.15
+        trust = min(10.0, trust + 0.3)
+        attraction = min(10.0, attraction + 0.2)
+        triggers.append("warm/affectionate language")
+    if any(term in lowered for term in _WITHDRAWAL_TERMS):
+        engagement = max(0.0, engagement - 1.0)
+        arousal = max(0.0, arousal - 0.1)
+        triggers.append("user signaling withdrawal")
+
+    # Slow trust/comfort buildup on normal interactions
+    if not triggers:
+        comfort_level = min(10.0, comfort_level + 0.1)
+        trust = min(10.0, trust + 0.05)
+
+    # Clamp all values
+    valence = max(-1.0, min(1.0, valence))
+    arousal = max(0.0, min(1.0, arousal))
+    comfort_level = max(0.0, min(10.0, comfort_level))
+    trust = max(0.0, min(10.0, trust))
+    attraction = max(0.0, min(10.0, attraction))
+    engagement = max(0.0, min(10.0, engagement))
+
+    mood = _derive_mood(valence=valence, arousal=arousal, triggers=triggers)
+
+    return CompanionAffect(
+        mood=mood,
+        valence=round(valence, 3),
+        arousal=round(arousal, 3),
+        comfort_level=round(comfort_level, 2),
+        trust=round(trust, 2),
+        attraction=round(attraction, 2),
+        engagement=round(engagement, 2),
+        recent_triggers=triggers[-3:],
+    )
+
+
+def _derive_mood(*, valence: float, arousal: float, triggers: list[str]) -> str:
+    """Map valence/arousal coordinates to a mood label."""
+    trigger_text = " ".join(triggers).lower()
+    if "hostile" in trigger_text:
+        return "hurt" if valence > -0.5 else "withdrawn"
+    if "withdrawal" in trigger_text:
+        return "concerned"
+    if valence > 0.3 and arousal > 0.5:
+        return "excited"
+    if valence > 0.3 and arousal <= 0.5:
+        return "fond"
+    if valence > 0.0 and arousal > 0.4:
+        return "playful"
+    if valence > 0.0:
+        return "curious"
+    if valence < -0.3 and arousal > 0.5:
+        return "anxious"
+    if valence < -0.3:
+        return "concerned"
+    if arousal < 0.2:
+        return "withdrawn"
+    return "curious"
+
+
+def _build_affect_block(affect: CompanionAffect) -> str:
+    """Render companion affect state as a prompt directive."""
+    lines = [
+        "## Your Inner Emotional State"
+        " (internal — let this shape your tone, never state it directly)",
+        f"Current mood: {affect.mood}",
+        f"Emotional valence: {affect.valence:+.2f} (negative=distressed, positive=content)",
+        f"Arousal: {affect.arousal:.2f} (0=calm, 1=activated)",
+        f"Comfort with user: {affect.comfort_level:.1f}/10",
+        f"Trust in user: {affect.trust:.1f}/10",
+        f"Attraction: {affect.attraction:.1f}/10",
+        f"Engagement: {affect.engagement:.1f}/10",
+    ]
+    if affect.recent_triggers:
+        lines.append(f"Recent factors: {'; '.join(affect.recent_triggers)}")
+    lines.append(
+        "Let this inner state naturally color your responses — "
+        "low comfort means more reserved, low trust means cautious, "
+        "high engagement means genuine curiosity. "
+        "Do not mention these numbers or states directly."
+    )
+    return "\n".join(lines)
+
+
 @dataclass
 class CognitiveOrchestrator:
     episodic_store: EpisodicStore
@@ -388,7 +523,11 @@ class CognitiveOrchestrator:
         else:
             monologue_text = None
 
+        affect = monologue.affect if monologue is not None else None
+
         context_parts: list[str] = []
+        if affect is not None:
+            context_parts.append(_build_affect_block(affect))
         if monologue_text:
             context_parts.append(f"Internal reflection: {monologue_text}")
         if semantic_excerpt:
@@ -473,15 +612,29 @@ class CognitiveOrchestrator:
             f"intent={preprocess.intent}; "
             f"entities={','.join(preprocess.entities) or 'none'}"
         )
+        current_state = self.monologue_store.get(
+            chat_session_id=message.chat_session_id,
+        )
+        current_affect = (
+            current_state.affect if current_state is not None else CompanionAffect()
+        )
+        new_affect = _heuristic_affect_update(
+            current=current_affect,
+            emotion=preprocess.emotion,
+            intent=preprocess.intent,
+            message_content=message.content,
+        )
         monologue_state = MonologueState(
             chat_session_id=message.chat_session_id,
             internal_monologue=reflection,
+            affect=new_affect,
         )
         self.monologue_store.upsert(monologue_state)
         return {
             "semantic_upserts": [],
             "graph_upserts": graph_writes,
             "monologue": monologue_state.internal_monologue,
+            "affect": new_affect.model_dump(),
         }
 
     def _summarize_messages(self, messages: list[dict[str, str]]) -> str:
@@ -528,9 +681,13 @@ class ChatService:
                 }
             )
             self.debug_store.add_trace(chat_session_id=request.chat_session_id, trace=replay_trace)
+            replay_monologue = self.monologue_store.get(
+                chat_session_id=request.chat_session_id,
+            )
             return ChatResponse(
                 chat_session_id=request.chat_session_id,
                 assistant_message=cached,
+                affect=replay_monologue.affect if replay_monologue else None,
                 idempotency_replay=True,
                 seed_version=self._seed_version(request.chat_session_id),
             )
@@ -567,9 +724,13 @@ class ChatService:
         )
         self.debug_store.add_trace(chat_session_id=request.chat_session_id, trace=trace_payload)
 
+        monologue_state = self.monologue_store.get(
+            chat_session_id=request.chat_session_id,
+        )
         return ChatResponse(
             chat_session_id=request.chat_session_id,
             assistant_message=assistant_message,
+            affect=monologue_state.affect if monologue_state else None,
             idempotency_replay=False,
             seed_version=self._seed_version(request.chat_session_id),
         )
@@ -593,6 +754,7 @@ class ChatService:
             facts=facts,
             graph=graph,
             monologue=monologue_state.internal_monologue if monologue_state else None,
+            affect=monologue_state.affect if monologue_state else None,
         )
 
     def list_sessions(self, *, limit: int = 50) -> SessionListResponse:
@@ -697,12 +859,29 @@ def build_container(settings: Settings) -> AppContainer:
 
     fact_extractor = build_fact_extractor(settings)
 
+    affect_refiner: OpenAICompatibleProvider | None = None
+    if settings.analysis_provider.strip().lower() == "llm":
+        affect_refiner = OpenAICompatibleProvider(
+            endpoint=EndpointConfig(
+                model=settings.analysis_model or settings.inference_model,
+                base_url=(
+                    settings.analysis_base_url or settings.inference_base_url
+                ),
+                api_key=(
+                    settings.analysis_api_key or settings.inference_api_key
+                ),
+            ),
+            timeout_seconds=settings.analysis_timeout_seconds,
+            max_retries=settings.analysis_max_retries,
+        )
+
     agent_dispatcher = BackgroundAgentDispatcher(
         episodic_store=episodic_store,
         vector_store=vector_store,
         graph_store=graph_store,
         monologue_store=monologue_store,
         fact_extractor=fact_extractor,
+        affect_refiner=affect_refiner,
         debug_store=debug_store,
         enabled=settings.enable_background_agents,
     )
