@@ -28,6 +28,8 @@ type SeedDraft = {
   notes: string;
 };
 
+type SidebarTab = "sessions" | "profile" | "knowledge" | "debug";
+
 const STORAGE_KEY = "aether.seed.defaults.v1";
 
 function parseEventData(raw: string): SseEventPayload {
@@ -121,7 +123,9 @@ export function App() {
 
   const [seedStatus, setSeedStatus] = useState("not seeded");
   const [seedDraft, setSeedDraft] = useState<SeedDraft>(() => loadSeedDraft());
-  const [isProfileOpen, setIsProfileOpen] = useState(true);
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("sessions");
 
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [debugStatus, setDebugStatus] = useState("idle");
@@ -228,7 +232,6 @@ export function App() {
       const response = await upsertSeed(targetSessionId, payload);
       if (response.ok) {
         setSeedStatus("seeded");
-        setIsProfileOpen(false);
       } else {
         setSeedStatus(`seed error (${response.status})`);
       }
@@ -260,12 +263,13 @@ export function App() {
       if (memory.seed_context) {
         setSeedDraft(toDraft(memory.seed_context.seed, memory.seed_context.user_description ?? "", memory.seed_context.notes ?? DEFAULT_NOTES));
         setSeedStatus("seeded");
-        setIsProfileOpen(false);
       } else {
         setSeedStatus("not seeded");
-        setIsProfileOpen(true);
+        setSidebarOpen(true);
+        setSidebarTab("profile");
       }
       setStatus("idle");
+      setSidebarOpen(false);
       void refreshDebug(targetSessionId);
       void refreshKnowledge(targetSessionId);
     } catch (error) {
@@ -396,80 +400,60 @@ export function App() {
 
   return (
     <div className="app">
-      <div className="workspace">
-        <aside className="panel sidebar">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <h2 style={{ margin: 0 }}>Sessions</h2>
-            <button type="button" onClick={() => void refreshSessions()}>
-              Refresh
-            </button>
-          </div>
-          <div className="meta">{sessionsStatus}</div>
-          <div className="session-list">
-            {sessions.map((item) => (
+      {/* Drawer backdrop */}
+      {sidebarOpen && (
+        <div className="drawer-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Slide-out drawer */}
+      {sidebarOpen && (
+        <aside className="drawer">
+          <nav className="drawer-tabs">
+            {(["sessions", "profile", "knowledge", "debug"] as const).map((tab) => (
               <button
-                key={item.chat_session_id}
+                key={tab}
                 type="button"
-                className={`session-item ${item.chat_session_id === sessionId ? "active" : ""}`}
-                onClick={() => void loadSession(item.chat_session_id)}
+                className={`drawer-tab ${sidebarTab === tab ? "drawer-tab--active" : ""}`}
+                onClick={() => setSidebarTab(tab)}
               >
-                <strong>{sessionLabel(item)}</strong>
-                <span className="meta">{item.chat_session_id}</span>
-                <span className="meta">
-                  updated {formatTimestamp(item.updated_at)} · {item.message_count} msgs
-                </span>
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
               </button>
             ))}
-            {sessions.length === 0 && <div className="meta">No saved sessions yet.</div>}
-          </div>
-        </aside>
+          </nav>
 
-        <main className="chat-column">
-          <div className="panel">
-            <h1>Project Aether</h1>
-            <p className="meta">SSE streaming chat client (React + FastAPI)</p>
-            <div className="row">
-              <input value={sessionId} readOnly />
-              <button type="button" onClick={() => void onNewSession()}>
-                New Session
-              </button>
-            </div>
-            <div className="meta">seed status: {seedStatus}</div>
-          </div>
-
-          <DebugPanel
-            isOpen={isDebugOpen}
-            onToggleOpen={() => setIsDebugOpen((prev) => !prev)}
-            onRefresh={() => void refreshDebug()}
-            traces={debugTraces}
-            status={debugStatus}
-            showRawPrompt={showRawPrompt}
-            setShowRawPrompt={setShowRawPrompt}
-            verbose={verboseDebug}
-            setVerbose={setVerboseDebug}
-          />
-
-          <KnowledgePanel
-            isOpen={isKnowledgeOpen}
-            onToggleOpen={() => setIsKnowledgeOpen((prev) => !prev)}
-            onRefresh={() => void refreshKnowledge()}
-            facts={knowledgeFacts}
-            graph={knowledgeGraph}
-            monologue={knowledgeMonologue}
-            status={knowledgeStatus}
-          />
-
-          <AffectPanel affect={knowledgeAffect} />
-
-          <div className="panel">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ margin: 0 }}>Companion Profile</h2>
-              <button type="button" onClick={() => setIsProfileOpen((prev) => !prev)}>
-                {isProfileOpen ? "Collapse" : "Expand"}
-              </button>
-            </div>
-            {isProfileOpen && (
+          <div className="drawer-body">
+            {/* Sessions tab */}
+            {sidebarTab === "sessions" && (
               <>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                  <span className="meta">{sessionsStatus}</span>
+                  <button type="button" onClick={() => void refreshSessions()}>
+                    Refresh
+                  </button>
+                </div>
+                <div className="session-list">
+                  {sessions.map((item) => (
+                    <button
+                      key={item.chat_session_id}
+                      type="button"
+                      className={`session-item ${item.chat_session_id === sessionId ? "active" : ""}`}
+                      onClick={() => void loadSession(item.chat_session_id)}
+                    >
+                      <strong>{sessionLabel(item)}</strong>
+                      <span className="meta">
+                        {formatTimestamp(item.updated_at)} · {item.message_count} msgs
+                      </span>
+                    </button>
+                  ))}
+                  {sessions.length === 0 && <div className="meta">No saved sessions yet.</div>}
+                </div>
+              </>
+            )}
+
+            {/* Profile tab */}
+            {sidebarTab === "profile" && (
+              <>
+                <div className="meta">seed status: {seedStatus}</div>
                 <div className="row">
                   <input
                     value={seedDraft.companion_name}
@@ -534,44 +518,95 @@ export function App() {
                 </div>
               </>
             )}
-          </div>
 
-          <div ref={messagesPaneRef} className="panel messages">
-            {messages.map((msg, idx) => (
-              <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
-                {msg.role === "assistant" && <strong>{companionLabel}</strong>}
-                {msg.role === "system" && <strong>system</strong>}
-                {msg.role === "tool" && <strong>tool</strong>}
-                <div>{msg.content}</div>
+            {/* Knowledge tab */}
+            {sidebarTab === "knowledge" && (
+              <div className="drawer-panel-host">
+                <KnowledgePanel
+                  isOpen={isKnowledgeOpen}
+                  onToggleOpen={() => setIsKnowledgeOpen((prev) => !prev)}
+                  onRefresh={() => void refreshKnowledge()}
+                  facts={knowledgeFacts}
+                  graph={knowledgeGraph}
+                  monologue={knowledgeMonologue}
+                  status={knowledgeStatus}
+                />
               </div>
-            ))}
-            {(isStreaming || pendingAssistant.length > 0) && (
-              <div className="message assistant">
-                <strong>{companionLabel}</strong>
-                <div>{pendingAssistant || "..."}</div>
+            )}
+
+            {/* Debug tab */}
+            {sidebarTab === "debug" && (
+              <div className="drawer-panel-host">
+                <DebugPanel
+                  isOpen={isDebugOpen}
+                  onToggleOpen={() => setIsDebugOpen((prev) => !prev)}
+                  onRefresh={() => void refreshDebug()}
+                  traces={debugTraces}
+                  status={debugStatus}
+                  showRawPrompt={showRawPrompt}
+                  setShowRawPrompt={setShowRawPrompt}
+                  verbose={verboseDebug}
+                  setVerbose={setVerboseDebug}
+                />
               </div>
             )}
           </div>
+        </aside>
+      )}
 
-          <form className="panel composer" onSubmit={onSubmit}>
-            <div className="row">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={onInputKeyDown}
-                placeholder="Type a message..."
-                rows={3}
-              />
+      {/* Main chat area */}
+      <main className="chat-main">
+        <header className="topbar">
+          <button
+            type="button"
+            className="topbar-menu"
+            onClick={() => setSidebarOpen((prev) => !prev)}
+          >
+            ☰
+          </button>
+          <span className="topbar-name">{companionLabel}</span>
+          <span className="meta topbar-status">{status}</span>
+          <button
+            type="button"
+            className="topbar-action"
+            onClick={() => void onNewSession()}
+          >
+            + New
+          </button>
+        </header>
+
+        <AffectPanel affect={knowledgeAffect} />
+
+        <div ref={messagesPaneRef} className="panel messages">
+          {messages.map((msg, idx) => (
+            <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
+              {msg.role === "assistant" && <strong>{companionLabel}</strong>}
+              {msg.role === "system" && <strong>system</strong>}
+              {msg.role === "tool" && <strong>tool</strong>}
+              <div>{msg.content}</div>
             </div>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <span className="meta">status: {status}</span>
-              <button type="submit" disabled={streamDisabled}>
-                Send
-              </button>
+          ))}
+          {(isStreaming || pendingAssistant.length > 0) && (
+            <div className="message assistant">
+              <strong>{companionLabel}</strong>
+              <div>{pendingAssistant || "..."}</div>
             </div>
-          </form>
-        </main>
-      </div>
+          )}
+        </div>
+
+        <form className="composer" onSubmit={onSubmit}>
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onInputKeyDown}
+            placeholder="Type a message..."
+            rows={2}
+          />
+          <button type="submit" disabled={streamDisabled}>
+            Send
+          </button>
+        </form>
+      </main>
     </div>
   );
 }

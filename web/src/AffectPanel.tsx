@@ -26,12 +26,7 @@ function AffectBar({ label, value, max, color }: BarDef) {
 
 export function AffectPanel({ affect }: AffectPanelProps) {
   if (!affect) {
-    return (
-      <div className="panel affect-panel">
-        <h2 style={{ margin: 0 }}>Companion State</h2>
-        <div className="meta">No affect data yet. Send a message to begin.</div>
-      </div>
-    );
+    return null;
   }
 
   const bars: BarDef[] = [
