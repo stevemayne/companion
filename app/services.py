@@ -372,7 +372,7 @@ class CognitiveOrchestrator:
     ) -> list[dict[str, str]]:
         recent_messages = self.episodic_store.get_recent_messages(
             chat_session_id=chat_session_id,
-            limit=6,
+            limit=50,
         )
         monologue = self.monologue_store.get(chat_session_id=chat_session_id)
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
@@ -412,7 +412,7 @@ class CognitiveOrchestrator:
         # user message (which was already appended to the store before this
         # method is called).
         history = [m for m in recent_messages if m.message_id != user_message.message_id]
-        for msg in history[-4:]:
+        for msg in history[-20:]:
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": user_message.content})
