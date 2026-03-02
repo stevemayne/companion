@@ -17,6 +17,7 @@ from app.api_models import (
     ApiErrorResponse,
     ChatRequest,
     ChatResponse,
+    KnowledgeResponse,
     MemoryResponse,
     SeedContextUpsertRequest,
     SessionListResponse,
@@ -283,6 +284,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_memory(chat_session_id: UUID, request: Request) -> MemoryResponse:
         container = get_container(request)
         return container.chat_service.get_memory(chat_session_id=chat_session_id)
+
+    @app.get(
+        "/v1/knowledge/{chat_session_id}",
+        response_model=KnowledgeResponse,
+        responses={422: {"model": ApiErrorResponse}},
+    )
+    def get_knowledge(chat_session_id: UUID, request: Request) -> KnowledgeResponse:
+        container = get_container(request)
+        return container.chat_service.get_knowledge(chat_session_id=chat_session_id)
 
     @app.get(
         "/v1/debug/{chat_session_id}",

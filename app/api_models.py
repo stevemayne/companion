@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas import CompanionSeed, Message, SessionSeedContext
+from app.schemas import CompanionSeed, GraphRelation, MemoryItem, Message, SessionSeedContext
 
 
 class ChatRequest(BaseModel):
@@ -30,6 +30,13 @@ class MemoryResponse(BaseModel):
     chat_session_id: UUID
     messages: list[Message]
     seed_context: SessionSeedContext | None = None
+
+
+class KnowledgeResponse(BaseModel):
+    chat_session_id: UUID
+    facts: list[MemoryItem]
+    graph: list[GraphRelation]
+    monologue: str | None = None
 
 
 class SessionSummary(BaseModel):

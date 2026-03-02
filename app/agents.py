@@ -117,17 +117,6 @@ class BackgroundAgentDispatcher:
         companion_name: str | None,
     ) -> None:
         try:
-            entities = self._extract_entities(f"{user_message} {assistant_message}")
-            for entity in entities:
-                self._graph_store.upsert_relation(
-                    GraphRelation(
-                        chat_session_id=chat_session_id,
-                        source="assistant",
-                        relation="ACKNOWLEDGED_IN_REPLY",
-                        target=entity,
-                    )
-                )
-
             outcome = self._fact_extractor.extract(
                 chat_session_id=chat_session_id,
                 user_message=user_message,
@@ -219,14 +208,3 @@ class BackgroundAgentDispatcher:
             metrics.reflector_jobs += reflector_jobs
             metrics.failures += failures
 
-    def _extract_entities(self, text: str) -> list[str]:
-        entities = [
-            token.strip(",.!?;:")
-            for token in text.split()
-            if token[:1].isupper() and len(token.strip(",.!?;:")) > 1
-        ]
-        deduped: list[str] = []
-        for entity in entities:
-            if entity not in deduped:
-                deduped.append(entity)
-        return deduped

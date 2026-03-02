@@ -3,6 +3,8 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import { fetchDebugTraces } from "./debugApi";
 import { DebugPanel } from "./DebugPanel";
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
+import { fetchKnowledge, GraphRelation, MemoryFact } from "./knowledgeApi";
+import { KnowledgePanel } from "./KnowledgePanel";
 import { fetchMemory } from "./memoryApi";
 import { SeedPayload, upsertSeed } from "./seedApi";
 import { fetchSessions, SessionSummary } from "./sessionApi";
@@ -126,6 +128,12 @@ export function App() {
   const [showRawPrompt, setShowRawPrompt] = useState(false);
   const [verboseDebug, setVerboseDebug] = useState(false);
 
+  const [isKnowledgeOpen, setIsKnowledgeOpen] = useState(false);
+  const [knowledgeStatus, setKnowledgeStatus] = useState("idle");
+  const [knowledgeFacts, setKnowledgeFacts] = useState<MemoryFact[]>([]);
+  const [knowledgeGraph, setKnowledgeGraph] = useState<GraphRelation[]>([]);
+  const [knowledgeMonologue, setKnowledgeMonologue] = useState<string | null>(null);
+
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const currentSessionRef = useRef(sessionId);
@@ -191,6 +199,25 @@ export function App() {
     }
   };
 
+  const refreshKnowledge = async (targetSessionId?: string): Promise<void> => {
+    const selectedSession = (targetSessionId ?? sessionId).trim();
+    if (!selectedSession) {
+      setKnowledgeStatus("no session");
+      return;
+    }
+    setKnowledgeStatus("loading");
+    try {
+      const data = await fetchKnowledge(selectedSession);
+      setKnowledgeFacts(data.facts);
+      setKnowledgeGraph(data.graph);
+      setKnowledgeMonologue(data.monologue);
+      setKnowledgeStatus(`loaded`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      setKnowledgeStatus(message);
+    }
+  };
+
   const bootstrapSeed = async (targetSessionId: string): Promise<void> => {
     const payload = toPayload(seedDraft);
     setSeedStatus("seeding...");
@@ -212,6 +239,10 @@ export function App() {
     setSessionId(targetSessionId);
     setDebugTraces([]);
     setDebugStatus("idle");
+    setKnowledgeFacts([]);
+    setKnowledgeGraph([]);
+    setKnowledgeMonologue(null);
+    setKnowledgeStatus("idle");
 
     try {
       const memory = await fetchMemory(targetSessionId);
@@ -232,6 +263,7 @@ export function App() {
       }
       setStatus("idle");
       void refreshDebug(targetSessionId);
+      void refreshKnowledge(targetSessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       setStatus(`load error (${message})`);
@@ -299,6 +331,7 @@ export function App() {
       setIsStreaming(false);
       source.close();
       void refreshDebug(selectedSession);
+      void refreshKnowledge(selectedSession);
       void refreshSessions();
     });
 
@@ -318,6 +351,7 @@ export function App() {
       setIsStreaming(false);
       source.close();
       void refreshDebug(selectedSession);
+      void refreshKnowledge(selectedSession);
       void refreshSessions();
     };
   };
@@ -339,6 +373,10 @@ export function App() {
     setPendingAssistant("");
     setDebugTraces([]);
     setDebugStatus("idle");
+    setKnowledgeFacts([]);
+    setKnowledgeGraph([]);
+    setKnowledgeMonologue(null);
+    setKnowledgeStatus("idle");
     await bootstrapSeed(newSessionId);
     await refreshSessions();
   };
@@ -404,6 +442,16 @@ export function App() {
             setShowRawPrompt={setShowRawPrompt}
             verbose={verboseDebug}
             setVerbose={setVerboseDebug}
+          />
+
+          <KnowledgePanel
+            isOpen={isKnowledgeOpen}
+            onToggleOpen={() => setIsKnowledgeOpen((prev) => !prev)}
+            onRefresh={() => void refreshKnowledge()}
+            facts={knowledgeFacts}
+            graph={knowledgeGraph}
+            monologue={knowledgeMonologue}
+            status={knowledgeStatus}
           />
 
           <div className="panel">

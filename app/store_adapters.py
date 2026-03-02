@@ -19,6 +19,7 @@ from app.schemas import (
     MemoryItem,
     MemoryKind,
     Message,
+    MonologueState,
     SessionActivity,
     SessionSeedContext,
 )
@@ -44,28 +45,6 @@ def embed_text(text: str, size: int = 16) -> list[float]:
 class PostgresEpisodicStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
-
-    def ensure_schema(self) -> None:
-        with psycopg.connect(self._dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS episodic_messages (
-                      chat_session_id UUID NOT NULL,
-                      message_id UUID PRIMARY KEY,
-                      role TEXT NOT NULL,
-                      content TEXT NOT NULL,
-                      created_at TIMESTAMPTZ NOT NULL
-                    );
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_episodic_session_created
-                    ON episodic_messages(chat_session_id, created_at DESC);
-                    """
-                )
-            conn.commit()
 
     def append_message(self, message: Message) -> None:
         with psycopg.connect(self._dsn) as conn:
@@ -145,6 +124,55 @@ class PostgresEpisodicStore:
         ]
 
 
+class PostgresMonologueStore:
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def get(self, *, chat_session_id: UUID) -> MonologueState | None:
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT chat_session_id, internal_monologue, updated_at
+                    FROM monologue_states
+                    WHERE chat_session_id = %s
+                    """,
+                    (_uuid_text(chat_session_id),),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return MonologueState(
+            chat_session_id=row[0],
+            internal_monologue=row[1],
+            updated_at=row[2],
+        )
+
+    def upsert(self, state: MonologueState) -> MonologueState:
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO monologue_states (
+                      chat_session_id,
+                      internal_monologue,
+                      updated_at
+                    ) VALUES (%s, %s, %s)
+                    ON CONFLICT (chat_session_id)
+                    DO UPDATE SET
+                      internal_monologue = EXCLUDED.internal_monologue,
+                      updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        _uuid_text(state.chat_session_id),
+                        state.internal_monologue,
+                        state.updated_at,
+                    ),
+                )
+            conn.commit()
+        return state
+
+
 class QdrantVectorStore:
     COLLECTION_NAME = "aether_semantic_memory"
 
@@ -214,32 +242,37 @@ class QdrantVectorStore:
             )
         return items
 
+    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]:
+        records, _next_offset = self._client.scroll(
+            collection_name=self.COLLECTION_NAME,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="chat_session_id",
+                        match=qdrant_models.MatchValue(value=_uuid_text(chat_session_id)),
+                    )
+                ]
+            ),
+            limit=1000,
+        )
+        items: list[MemoryItem] = []
+        for record in records:
+            payload = record.payload or {}
+            kind_raw = str(payload.get("kind", MemoryKind.SEMANTIC.value))
+            kind = MemoryKind(kind_raw)
+            items.append(
+                MemoryItem(
+                    chat_session_id=chat_session_id,
+                    kind=kind,
+                    content=str(payload.get("content", "")),
+                )
+            )
+        return items
+
 
 class PostgresSeedContextStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
-
-    def ensure_schema(self) -> None:
-        with psycopg.connect(self._dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS session_seed_contexts (
-                      chat_session_id UUID PRIMARY KEY,
-                      version INTEGER NOT NULL,
-                      companion_name TEXT NOT NULL,
-                      backstory TEXT NOT NULL,
-                      character_traits JSONB NOT NULL,
-                      goals JSONB NOT NULL,
-                      relationship_setup TEXT NOT NULL,
-                      user_description TEXT,
-                      notes TEXT,
-                      created_at TIMESTAMPTZ NOT NULL,
-                      updated_at TIMESTAMPTZ NOT NULL
-                    );
-                    """
-                )
-            conn.commit()
 
     def create(
         self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest
@@ -473,6 +506,31 @@ class Neo4jGraphStore:
                 chat_session_id=_uuid_text(chat_session_id),
                 entity=entity,
                 limit=limit,
+            )
+            return [
+                GraphRelation(
+                    chat_session_id=chat_session_id,
+                    source=record["source"],
+                    relation=record["relation"],
+                    target=record["target"],
+                    confidence=float(record["confidence"]),
+                )
+                for record in result
+            ]
+
+    def list_relations(self, *, chat_session_id: UUID) -> list[GraphRelation]:
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (s:Entity {chat_session_id: $chat_session_id})
+                -[r:RELATES_TO {chat_session_id: $chat_session_id}]->
+                (t:Entity {chat_session_id: $chat_session_id})
+                RETURN s.name AS source,
+                       r.relation AS relation,
+                       t.name AS target,
+                       r.confidence AS confidence
+                """,
+                chat_session_id=_uuid_text(chat_session_id),
             )
             return [
                 GraphRelation(

@@ -14,15 +14,52 @@ from app.inference import EndpointConfig, OpenAICompatibleProvider
 from app.schemas import PreprocessResult
 
 ENTITY_STOPWORDS = {
-    "who",
-    "what",
-    "when",
-    "where",
-    "why",
-    "how",
-    "which",
-    "whom",
-    "whose",
+    # Question words
+    "who", "what", "when", "where", "why", "how", "which", "whom", "whose",
+    # Pronouns
+    "i", "me", "my", "mine", "myself", "you", "your", "yours", "yourself",
+    "he", "him", "his", "himself", "she", "her", "hers", "herself",
+    "it", "its", "itself", "we", "us", "our", "ours", "ourselves",
+    "they", "them", "their", "theirs", "themselves",
+    "this", "that", "these", "those",
+    # Determiners / articles
+    "the", "a", "an", "some", "any", "all", "each", "every", "no", "other",
+    # Common verbs / auxiliaries
+    "is", "am", "are", "was", "were", "be", "been", "being",
+    "do", "did", "does", "done", "doing",
+    "has", "have", "had", "having",
+    "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+    "go", "went", "gone", "get", "got", "let", "make", "made", "take", "took",
+    "come", "came", "see", "saw", "know", "knew", "think", "thought",
+    "tell", "told", "said", "say", "give", "gave", "want", "need", "like",
+    "just", "also", "still", "keep", "kept",
+    # Common adjectives / adverbs
+    "good", "great", "nice", "bad", "well", "very", "really", "sure",
+    "much", "more", "most", "many", "few", "new", "old", "big", "little",
+    "long", "short", "first", "last", "next", "same", "different",
+    "right", "wrong", "only", "even", "already", "never", "always",
+    # Conjunctions / prepositions
+    "and", "but", "or", "so", "yet", "for", "nor",
+    "about", "after", "before", "from", "into", "with", "without",
+    "over", "under", "between", "through", "during", "since", "until",
+    # Greetings / interjections
+    "hello", "hi", "hey", "thanks", "thank", "yes", "no", "oh", "okay",
+    "sorry", "please", "wow", "yeah", "nah",
+    # Other common sentence starters
+    "here", "there", "now", "then", "today", "tomorrow", "yesterday",
+    "maybe", "perhaps", "actually", "basically", "honestly",
+    "not", "don", "doesn", "didn", "won", "wouldn", "can", "couldn",
+    "shouldn", "isn", "aren", "wasn", "weren", "hasn", "haven", "hadn",
+    # Contractions (with straight and curly apostrophes)
+    "i'm", "i've", "i'd", "i'll", "it's", "he's", "she's", "we're", "we've",
+    "we'd", "we'll", "they're", "they've", "they'd", "they'll", "you're",
+    "you've", "you'd", "you'll", "that's", "there's", "here's", "what's",
+    "who's", "let's", "don't", "doesn't", "didn't", "won't", "wouldn't",
+    "can't", "couldn't", "shouldn't", "isn't", "aren't", "wasn't", "weren't",
+    "i\u2019m", "i\u2019ve", "i\u2019d", "i\u2019ll", "it\u2019s", "he\u2019s", "she\u2019s",
+    "we\u2019re", "we\u2019ve", "they\u2019re", "they\u2019ve", "you\u2019re", "you\u2019ve",
+    "that\u2019s", "there\u2019s", "here\u2019s", "don\u2019t", "doesn\u2019t", "didn\u2019t",
+    "won\u2019t", "wouldn\u2019t", "can\u2019t", "couldn\u2019t", "shouldn\u2019t",
 }
 
 ALLOWED_INTENTS = {"question", "status_update", "statement"}
@@ -76,7 +113,7 @@ class _LLMAnalysisPayload(BaseModel):
     def normalize_entities(cls, value: list[str]) -> list[str]:
         cleaned: list[str] = []
         for token in value:
-            entity = token.strip(",.!?;:()[]{}\"'")
+            entity = token.strip(",.!?;:()[]{}\"''\u2018\u2019\u201c\u201d")
             if not entity:
                 continue
             if entity.lower() in ENTITY_STOPWORDS:
@@ -112,7 +149,7 @@ class HeuristicIntentAnalyzer:
 
         entities: list[str] = []
         for token in content.split():
-            cleaned = token.strip(",.!?;:()[]{}\"'")
+            cleaned = token.strip(",.!?;:()[]{}\"''\u2018\u2019\u201c\u201d")
             if not cleaned or len(cleaned) <= 1 or not cleaned[:1].isupper():
                 continue
             if cleaned.lower() in ENTITY_STOPWORDS:

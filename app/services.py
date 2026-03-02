@@ -11,10 +11,16 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 
 from app.agents import BackgroundAgentDispatcher
-from app.analysis import IntentAnalyzer, build_fact_extractor, build_intent_analyzer
+from app.analysis import (
+    ENTITY_STOPWORDS,
+    IntentAnalyzer,
+    build_fact_extractor,
+    build_intent_analyzer,
+)
 from app.api_models import (
     ChatRequest,
     ChatResponse,
+    KnowledgeResponse,
     MemoryResponse,
     SeedContextUpsertRequest,
     SessionListResponse,
@@ -37,6 +43,7 @@ from app.schemas import (
 from app.store_adapters import (
     Neo4jGraphStore,
     PostgresEpisodicStore,
+    PostgresMonologueStore,
     PostgresSeedContextStore,
     QdrantVectorStore,
 )
@@ -62,6 +69,8 @@ class VectorStore(Protocol):
         self, *, chat_session_id: UUID, query: str, limit: int = 10
     ) -> list[MemoryItem]: ...
 
+    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]: ...
+
 
 class GraphStore(Protocol):
     def upsert_relation(self, relation: GraphRelation) -> None: ...
@@ -69,6 +78,8 @@ class GraphStore(Protocol):
     def get_related(
         self, *, chat_session_id: UUID, entity: str, limit: int = 10
     ) -> list[GraphRelation]: ...
+
+    def list_relations(self, *, chat_session_id: UUID) -> list[GraphRelation]: ...
 
 
 class SeedContextStore(Protocol):
@@ -144,6 +155,10 @@ class InMemoryVectorStore:
         scored.sort(key=lambda candidate: candidate[0], reverse=True)
         return [item for _, item in scored[:limit]]
 
+    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]:
+        with self._lock:
+            return list(self._items.get(chat_session_id, []))
+
 
 class InMemoryGraphStore:
     def __init__(self) -> None:
@@ -167,6 +182,10 @@ class InMemoryGraphStore:
             if relation.source.lower() == entity_lc or relation.target.lower() == entity_lc
         ]
         return related[:limit]
+
+    def list_relations(self, *, chat_session_id: UUID) -> list[GraphRelation]:
+        with self._lock:
+            return list(self._relations.get(chat_session_id, []))
 
 
 class InMemoryMonologueStore:
@@ -247,7 +266,7 @@ class CognitiveOrchestrator:
     episodic_store: EpisodicStore
     vector_store: VectorStore
     graph_store: GraphStore
-    monologue_store: InMemoryMonologueStore
+    monologue_store: InMemoryMonologueStore | PostgresMonologueStore
     seed_store: SeedContextStore
     model_provider: ModelProvider
     intent_analyzer: IntentAnalyzer
@@ -423,11 +442,14 @@ class CognitiveOrchestrator:
         # Merge LLM-provided entities with a heuristic safety net so that
         # MENTIONED_IN_SESSION relations are always written even when the LLM
         # analysis returns an empty entity list.
-        heuristic_entities: list[str] = [
-            token.strip(",.!?;:()[]{}\"'")
-            for token in message.content.split()
-            if token[:1].isupper() and len(token.strip(",.!?;:()[]{}\"'")) > 1
-        ]
+        heuristic_entities: list[str] = []
+        for token in message.content.split():
+            cleaned = token.strip(",.!?;:()[]{}\"''\u2018\u2019\u201c\u201d")
+            if not cleaned or len(cleaned) <= 1 or not cleaned[:1].isupper():
+                continue
+            if cleaned.lower() in ENTITY_STOPWORDS:
+                continue
+            heuristic_entities.append(cleaned)
         merged: list[str] = list(preprocess.entities)
         seen = {e.lower() for e in merged}
         for entity in heuristic_entities:
@@ -474,6 +496,9 @@ class CognitiveOrchestrator:
 @dataclass
 class ChatService:
     episodic_store: EpisodicStore
+    vector_store: VectorStore
+    graph_store: GraphStore
+    monologue_store: InMemoryMonologueStore | PostgresMonologueStore
     seed_store: SeedContextStore
     orchestrator: CognitiveOrchestrator
     idempotency_cache: dict[str, Message]
@@ -559,6 +584,17 @@ class ChatService:
             seed_context=self.seed_store.get(chat_session_id=chat_session_id),
         )
 
+    def get_knowledge(self, *, chat_session_id: UUID) -> KnowledgeResponse:
+        facts = self.vector_store.list_memories(chat_session_id=chat_session_id)
+        graph = self.graph_store.list_relations(chat_session_id=chat_session_id)
+        monologue_state = self.monologue_store.get(chat_session_id=chat_session_id)
+        return KnowledgeResponse(
+            chat_session_id=chat_session_id,
+            facts=facts,
+            graph=graph,
+            monologue=monologue_state.internal_monologue if monologue_state else None,
+        )
+
     def list_sessions(self, *, limit: int = 50) -> SessionListResponse:
         by_session: dict[UUID, SessionSummary] = {}
         for item in self.episodic_store.list_session_activity(limit=limit):
@@ -613,7 +649,7 @@ class AppContainer:
     seed_store: SeedContextStore
     vector_store: VectorStore
     graph_store: GraphStore
-    monologue_store: InMemoryMonologueStore
+    monologue_store: InMemoryMonologueStore | PostgresMonologueStore
     agent_dispatcher: BackgroundAgentDispatcher
     debug_store: DebugTraceStore
     orchestrator: CognitiveOrchestrator
@@ -631,16 +667,13 @@ def _external_stores_from_settings(
         password=settings.neo4j_password,
     )
     seed = PostgresSeedContextStore(dsn=settings.postgres_dsn)
-    episodic.ensure_schema()
     vector.ensure_schema()
     graph.ensure_schema()
-    seed.ensure_schema()
     logger.info("External stores initialized.")
     return episodic, vector, graph, seed
 
 
 def build_container(settings: Settings) -> AppContainer:
-    monologue_store = InMemoryMonologueStore()
     model_provider = build_inference_provider(settings)
     intent_analyzer = build_intent_analyzer(settings)
     debug_store = DebugTraceStore(
@@ -652,11 +685,15 @@ def build_container(settings: Settings) -> AppContainer:
         episodic_store, vector_store, graph_store, seed_store = _external_stores_from_settings(
             settings
         )
+        monologue_store: InMemoryMonologueStore | PostgresMonologueStore = (
+            PostgresMonologueStore(dsn=settings.postgres_dsn)
+        )
     else:
         episodic_store = InMemoryEpisodicStore()
         vector_store = InMemoryVectorStore()
         graph_store = InMemoryGraphStore()
         seed_store = InMemorySeedContextStore()
+        monologue_store = InMemoryMonologueStore()
 
     fact_extractor = build_fact_extractor(settings)
 
@@ -681,6 +718,9 @@ def build_container(settings: Settings) -> AppContainer:
     )
     chat_service = ChatService(
         episodic_store=episodic_store,
+        vector_store=vector_store,
+        graph_store=graph_store,
+        monologue_store=monologue_store,
         seed_store=seed_store,
         orchestrator=orchestrator,
         idempotency_cache={},

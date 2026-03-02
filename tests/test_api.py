@@ -91,6 +91,42 @@ def test_seed_is_applied_from_first_turn() -> None:
     assert "You are Ari" in chat_response.json()["assistant_message"]["content"]
 
 
+def test_knowledge_endpoint_returns_facts_and_graph() -> None:
+    app = create_app()
+    client = TestClient(app)
+    session_id = str(uuid4())
+
+    client.post("/v1/chat", json={"chat_session_id": session_id, "message": "My sister Sarah is great."})
+
+    response = client.get(f"/v1/knowledge/{session_id}")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["chat_session_id"] == session_id
+    assert isinstance(data["facts"], list)
+    assert isinstance(data["graph"], list)
+    # Monologue should exist after a turn
+    assert data["monologue"] is not None
+
+    # Graph should have at least a MENTIONED_IN_SESSION relation from postprocess
+    relations = data["graph"]
+    relation_types = [r["relation"] for r in relations]
+    assert "MENTIONED_IN_SESSION" in relation_types
+
+
+def test_knowledge_endpoint_empty_session() -> None:
+    client = TestClient(create_app())
+    session_id = str(uuid4())
+
+    response = client.get(f"/v1/knowledge/{session_id}")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["facts"] == []
+    assert data["graph"] == []
+    assert data["monologue"] is None
+
+
 def test_sessions_list_returns_recent_activity_with_seed_metadata() -> None:
     client = TestClient(create_app())
     session_a = str(uuid4())
