@@ -296,13 +296,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(
         "/v1/debug/{chat_session_id}",
-        responses={404: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
+        responses={
+            403: {"model": ApiErrorResponse},
+            404: {"model": ApiErrorResponse},
+            422: {"model": ApiErrorResponse},
+        },
     )
     def get_debug_traces(chat_session_id: UUID, request: Request) -> dict[str, object]:
         container = get_container(request)
         if not container.debug_store.enabled:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="Debug tracing is disabled.",
             )
         traces = container.debug_store.list_traces(chat_session_id=chat_session_id)

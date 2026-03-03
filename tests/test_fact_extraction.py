@@ -5,7 +5,6 @@ from uuid import uuid4
 import pytest
 
 from app.analysis import (
-    EntityMention,
     ExtractedFact,
     HeuristicFactExtractor,
     LLMFactExtractor,

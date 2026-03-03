@@ -31,7 +31,9 @@ def test_openai_compatible_provider_success() -> None:
         client=client,
     )
 
-    result = provider.generate(chat_session_id=uuid4(), messages=[{"role": "user", "content": "hi"}])
+    result = provider.generate(
+        chat_session_id=uuid4(), messages=[{"role": "user", "content": "hi"}],
+    )
     assert result == "hello"
 
 
@@ -52,7 +54,9 @@ def test_openai_compatible_provider_retries_then_succeeds() -> None:
         client=client,
     )
 
-    result = provider.generate(chat_session_id=uuid4(), messages=[{"role": "user", "content": "hi"}])
+    result = provider.generate(
+        chat_session_id=uuid4(), messages=[{"role": "user", "content": "hi"}],
+    )
     assert result == "recovered"
     assert attempts["count"] == 2
 
@@ -78,7 +82,9 @@ def test_failover_provider_uses_secondary() -> None:
     )
 
     provider = FailoverInferenceProvider(primary=primary, secondary=secondary)
-    result = provider.generate(chat_session_id=uuid4(), messages=[{"role": "user", "content": "hi"}])
+    result = provider.generate(
+        chat_session_id=uuid4(), messages=[{"role": "user", "content": "hi"}],
+    )
     assert result == "from-secondary"
 
 

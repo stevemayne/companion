@@ -28,14 +28,12 @@ from app.api_models import (
 )
 from app.config import Settings
 from app.debug_trace import DebugTraceStore, build_trace_base, sanitize_debug_text
-from app.inference import build_inference_provider
+from app.inference import EndpointConfig, OpenAICompatibleProvider, build_inference_provider
 from app.prompting import build_companion_system_prompt
-from app.inference import EndpointConfig, OpenAICompatibleProvider
 from app.schemas import (
     CompanionAffect,
     GraphRelation,
     MemoryItem,
-    MemoryKind,
     Message,
     MonologueState,
     PreprocessResult,
@@ -328,7 +326,8 @@ _LEAKED_STATE_PATTERNS = [
     #   [Emotional state: ...], [Current mood: ...], [Internal: ...], etc.
     re.compile(
         r"\[(?:Emotional state|Current mood|Internal(?: state)?|Affect"
-        r"|Session [Cc]ontext|Inner state|Detected intent)[:\s][^\]]*\]",
+        r"|Session [Cc]ontext|Inner state|Detected intent"
+        r"|Earlier response)[:\s][^\]]*\]",
         re.IGNORECASE,
     ),
     # Affect metrics with /10 scales leaked inline:
@@ -809,7 +808,10 @@ class CognitiveOrchestrator:
         # analysis returns an empty entity list.
         heuristic_entities: list[str] = []
         for token in message.content.split():
-            cleaned = token.strip(",.!?;:()[]{}\"''\u2018\u2019\u201c\u201d")
+            _PUNCT = r"[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+"
+            cleaned = re.sub(
+                rf"^{_PUNCT}|{_PUNCT}$", "", token,
+            )
             if not cleaned or len(cleaned) <= 1 or not cleaned[:1].isupper():
                 continue
             if cleaned.lower() in ENTITY_STOPWORDS:

@@ -96,7 +96,10 @@ def test_knowledge_endpoint_returns_facts_and_graph() -> None:
     client = TestClient(app)
     session_id = str(uuid4())
 
-    client.post("/v1/chat", json={"chat_session_id": session_id, "message": "My sister Sarah is great."})
+    client.post(
+        "/v1/chat",
+        json={"chat_session_id": session_id, "message": "My sister Sarah is great."},
+    )
 
     response = client.get(f"/v1/knowledge/{session_id}")
     assert response.status_code == 200

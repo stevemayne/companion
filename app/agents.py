@@ -179,7 +179,12 @@ class BackgroundAgentDispatcher:
                 "latency_ms": round(outcome.latency_ms, 2),
                 "facts": [f.text for f in outcome.facts],
                 "structured_facts": [
-                    {"subject": f.subject, "predicate": f.predicate, "object": f.object, "text": f.text}
+                    {
+                        "subject": f.subject,
+                        "predicate": f.predicate,
+                        "object": f.object,
+                        "text": f.text,
+                    }
                     for f in outcome.facts
                 ],
                 "entities": [

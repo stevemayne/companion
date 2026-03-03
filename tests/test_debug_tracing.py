@@ -21,14 +21,14 @@ def _seed_payload(name: str) -> dict[str, object]:
     }
 
 
-def test_debug_tracing_disabled_returns_404() -> None:
+def test_debug_tracing_disabled_returns_403() -> None:
     app = create_app(Settings(debug_tracing=False, inference_provider="mock"))
     client = TestClient(app)
     session_id = str(uuid4())
 
     response = client.get(f"/v1/debug/{session_id}")
 
-    assert response.status_code == 404
+    assert response.status_code == 403
 
     client.post(
         "/v1/chat",

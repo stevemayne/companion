@@ -43,12 +43,12 @@ ENTITY_STOPWORDS = {
     "about", "after", "before", "from", "into", "with", "without",
     "over", "under", "between", "through", "during", "since", "until",
     # Greetings / interjections
-    "hello", "hi", "hey", "thanks", "thank", "yes", "no", "oh", "okay",
+    "hello", "hi", "hey", "thanks", "thank", "yes", "oh", "okay",
     "sorry", "please", "wow", "yeah", "nah",
     # Other common sentence starters
     "here", "there", "now", "then", "today", "tomorrow", "yesterday",
     "maybe", "perhaps", "actually", "basically", "honestly",
-    "not", "don", "doesn", "didn", "won", "wouldn", "can", "couldn",
+    "not", "don", "doesn", "didn", "won", "wouldn", "couldn",
     "shouldn", "isn", "aren", "wasn", "weren", "hasn", "haven", "hadn",
     # Contractions (with straight and curly apostrophes)
     "i'm", "i've", "i'd", "i'll", "it's", "he's", "she's", "we're", "we've",
@@ -113,7 +113,11 @@ class _LLMAnalysisPayload(BaseModel):
     def normalize_entities(cls, value: list[str]) -> list[str]:
         cleaned: list[str] = []
         for token in value:
-            entity = token.strip(",.!?;:()[]{}\"''\u2018\u2019\u201c\u201d")
+            entity = re.sub(
+                r"^[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+"
+                r"|[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+$",
+                "", token,
+            )
             if not entity:
                 continue
             if entity.lower() in ENTITY_STOPWORDS:
@@ -149,7 +153,11 @@ class HeuristicIntentAnalyzer:
 
         entities: list[str] = []
         for token in content.split():
-            cleaned = token.strip(",.!?;:()[]{}\"''\u2018\u2019\u201c\u201d")
+            cleaned = re.sub(
+                r"^[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+"
+                r"|[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+$",
+                "", token,
+            )
             if not cleaned or len(cleaned) <= 1 or not cleaned[:1].isupper():
                 continue
             if cleaned.lower() in ENTITY_STOPWORDS:
@@ -386,7 +394,12 @@ class LLMFactExtractor:
             raw = self._provider.generate(
                 chat_session_id=chat_session_id,
                 messages=[
-                    {"role": "user", "content": self._extraction_prompt(user_message, assistant_message, companion_name)},
+                    {
+                        "role": "user",
+                        "content": self._extraction_prompt(
+                            user_message, assistant_message, companion_name,
+                        ),
+                    },
                 ],
             )
             facts, entities = _parse_extraction_payload(raw)
@@ -414,7 +427,12 @@ class LLMFactExtractor:
                 latency_ms=(perf_counter() - start) * 1000,
             )
 
-    def _extraction_prompt(self, user_message: str, assistant_message: str, companion_name: str | None) -> str:
+    def _extraction_prompt(
+        self,
+        user_message: str,
+        assistant_message: str,
+        companion_name: str | None,
+    ) -> str:
         companion_rule = ""
         if companion_name:
             companion_rule = (
@@ -549,7 +567,10 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                 text = f"{subject} {predicate} {obj}".strip()
             if text and subject and text not in seen_texts:
                 seen_texts.add(text)
-                facts.append(ExtractedFact(subject=subject, predicate=predicate, object=obj, text=text))
+                facts.append(ExtractedFact(
+                    subject=subject, predicate=predicate,
+                    object=obj, text=text,
+                ))
         elif isinstance(item, str):
             cleaned = item.strip()
             if cleaned and cleaned not in seen_texts:
