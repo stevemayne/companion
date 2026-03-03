@@ -348,8 +348,6 @@ _LEAKED_STATE_PATTERNS = [
     ),
     # "Detected intent: ...; emotion: ..." line
     re.compile(r"Detected intent:\s*\w+;\s*emotion:\s*\w+", re.IGNORECASE),
-    # "Relevant memories: ..." or "Relationships: ..." context lines
-    re.compile(r"(?:Relevant memories|Relationships|Internal reflection):\s*.+", re.IGNORECASE),
 ]
 
 
