@@ -327,7 +327,7 @@ _LEAKED_STATE_PATTERNS = [
     re.compile(
         r"\[(?:Emotional state|Current mood|Internal(?: state)?|Affect"
         r"|Session [Cc]ontext|Inner state|Detected intent"
-        r"|Earlier response)[:\s][^\]]*\]",
+        r"|Earlier response)[:\s](?:[^\]]*\]|[\s\S]+$)",
         re.IGNORECASE,
     ),
     # Affect metrics with /10 scales leaked inline:
