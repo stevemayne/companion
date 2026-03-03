@@ -347,6 +347,15 @@ _LEAKED_STATE_PATTERNS = [
     ),
     # "Detected intent: ...; emotion: ..." line
     re.compile(r"Detected intent:\s*\w+;\s*emotion:\s*\w+", re.IGNORECASE),
+    # Unbracketed state dump at end of response (no surrounding []).
+    # Must start on its own line and contain numeric metrics to avoid
+    # false-positives on natural prose mentioning "emotional state".
+    #   Emotional state: Excited (+0.75), positive (0.75) ...
+    re.compile(
+        r"^\n*(?:Emotional state|Current mood|Internal(?: state)?|Affect"
+        r"|Inner state)\s*:[^\n]*\d+[\s\S]*$",
+        re.IGNORECASE | re.MULTILINE,
+    ),
 ]
 
 

@@ -48,8 +48,7 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
             "You are a warm and emotionally attuned AI companion. "
             "Respond relationally, remember context, and be concise. "
             "Your inner emotional state is provided each turn in the Session Context. "
-            "Let it guide your tone, warmth, and depth of engagement naturally."
-            + _RESPONSE_RULES
+            "Let it guide your tone, warmth, and depth of engagement naturally." + _RESPONSE_RULES
         )
 
     seed = seed_context.seed
@@ -57,7 +56,7 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
     goals = ", ".join(seed.goals) if seed.goals else "build trust and continuity"
 
     prompt = (
-        f"You are {seed.companion_name}, an AI companion. "
+        f"You are {seed.companion_name}. "
         "Never identify yourself as 'Assistant'; "
         f"use '{seed.companion_name}' when asked your name. "
         f"Backstory: {seed.backstory}. "
@@ -69,10 +68,7 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
     )
 
     if seed_context.user_description:
-        prompt += (
-            f"\n\n## About the User\n"
-            f"{seed_context.user_description}"
-        )
+        prompt += f"\n\n## About the User\n{seed_context.user_description}"
 
     prompt += _RESPONSE_RULES
 
