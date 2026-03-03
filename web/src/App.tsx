@@ -455,6 +455,7 @@ export function App() {
               <>
                 <div className="meta">seed status: {seedStatus}</div>
                 <div className="row">
+                  <label>Name</label>
                   <input
                     value={seedDraft.companion_name}
                     onChange={(e) =>
@@ -464,6 +465,7 @@ export function App() {
                   />
                 </div>
                 <div className="row">
+                  <label>Backstory</label>
                   <textarea
                     rows={2}
                     value={seedDraft.backstory}
@@ -472,22 +474,25 @@ export function App() {
                   />
                 </div>
                 <div className="row">
+                  <label>Traits</label>
                   <input
                     value={seedDraft.character_traits}
                     onChange={(e) =>
                       setSeedDraft((prev) => ({ ...prev, character_traits: e.target.value }))
                     }
-                    placeholder="Traits (comma-separated)"
+                    placeholder="Comma-separated"
                   />
                 </div>
                 <div className="row">
+                  <label>Goals</label>
                   <input
                     value={seedDraft.goals}
                     onChange={(e) => setSeedDraft((prev) => ({ ...prev, goals: e.target.value }))}
-                    placeholder="Goals (comma-separated)"
+                    placeholder="Comma-separated"
                   />
                 </div>
                 <div className="row">
+                  <label>Relationship</label>
                   <input
                     value={seedDraft.relationship_setup}
                     onChange={(e) =>
@@ -497,16 +502,18 @@ export function App() {
                   />
                 </div>
                 <div className="row">
+                  <label>User</label>
                   <textarea
                     rows={2}
                     value={seedDraft.user_description}
                     onChange={(e) =>
                       setSeedDraft((prev) => ({ ...prev, user_description: e.target.value }))
                     }
-                    placeholder="About the user (e.g. name, pronouns, interests)"
+                    placeholder="Name, pronouns, interests"
                   />
                 </div>
                 <div className="row">
+                  <label>Notes</label>
                   <input
                     value={seedDraft.notes}
                     onChange={(e) => setSeedDraft((prev) => ({ ...prev, notes: e.target.value }))}

@@ -174,7 +174,15 @@ body {
 
 .row {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.row label {
+  width: 100%;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #6b6357;
 }
 
 .row input,

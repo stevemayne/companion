@@ -395,13 +395,17 @@ def _extract_user_state(content: str) -> list[str]:
     sentences = re.split(r"(?<=[.!?])\s+|\n", content.strip())
     results: list[str] = []
     for s in sentences:
-        s = s.strip()
+        s = s.strip("* ")
         if not s:
             continue
         lowered = s.lower()
-        if not re.match(r"^(?:i\b|let me\b)", lowered):
-            continue
-        if any(kw in lowered for kw in _USER_STATE_KEYWORDS):
+        # "I put on ...", "Let me ..." — action statements
+        if re.match(r"^(?:i\b|let me\b)", lowered):
+            if any(kw in lowered for kw in _USER_STATE_KEYWORDS):
+                results.append(s.rstrip(".!? "))
+                continue
+        # "My hands are ...", "My tail grows ..." — possessive body/state
+        if re.match(r"^my\b", lowered):
             results.append(s.rstrip(".!? "))
     return results
 
