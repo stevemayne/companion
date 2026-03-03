@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import struct
+import math
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -13,12 +13,14 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 
 from app.api_models import SeedContextUpsertRequest
+from app.embedding import EmbeddingProvider
 from app.schemas import (
     CompanionAffect,
     CompanionSeed,
     GraphRelation,
     MemoryItem,
     MemoryKind,
+    MemoryStatus,
     Message,
     MonologueState,
     SessionActivity,
@@ -28,19 +30,6 @@ from app.schemas import (
 
 def _uuid_text(value: UUID) -> str:
     return str(value)
-
-
-def embed_text(text: str, size: int = 16) -> list[float]:
-    digest = hashlib.sha256(text.encode("utf-8")).digest()
-    floats: list[float] = []
-    for idx in range(size):
-        start = (idx * 4) % len(digest)
-        chunk = digest[start : start + 4]
-        if len(chunk) < 4:
-            chunk = (chunk + digest)[:4]
-        value = struct.unpack("!I", chunk)[0]
-        floats.append((value % 1000) / 1000.0)
-    return floats
 
 
 class PostgresEpisodicStore:
@@ -190,17 +179,24 @@ class PostgresMonologueStore:
 class QdrantVectorStore:
     COLLECTION_NAME = "aether_semantic_memory"
 
-    def __init__(self, url: str) -> None:
+    def __init__(
+        self, url: str, embedder: EmbeddingProvider, dimensions: int = 1536,
+    ) -> None:
         self._client = QdrantClient(url=url)
+        self._embedder = embedder
+        self._dimensions = dimensions
 
     def ensure_schema(self) -> None:
-        existing = {collection.name for collection in self._client.get_collections().collections}
+        existing = {
+            collection.name
+            for collection in self._client.get_collections().collections
+        }
         if self.COLLECTION_NAME in existing:
             return
         self._client.create_collection(
             collection_name=self.COLLECTION_NAME,
             vectors_config=qdrant_models.VectorParams(
-                size=16,
+                size=self._dimensions,
                 distance=qdrant_models.Distance.COSINE,
             ),
         )
@@ -211,6 +207,10 @@ class QdrantVectorStore:
             "kind": item.kind.value,
             "content": item.content,
             "score": item.score,
+            "importance": item.importance,
+            "access_count": item.access_count,
+            "last_accessed": item.last_accessed.isoformat() if item.last_accessed else None,
+            "status": item.status.value,
             "created_at": item.created_at.isoformat(),
         }
         self._client.upsert(
@@ -218,7 +218,7 @@ class QdrantVectorStore:
             points=[
                 qdrant_models.PointStruct(
                     id=_uuid_text(item.memory_id),
-                    vector=embed_text(item.content),
+                    vector=self._embedder.embed(item.content),
                     payload=payload,
                 )
             ],
@@ -227,34 +227,120 @@ class QdrantVectorStore:
     def query_similar(
         self, *, chat_session_id: UUID, query: str, limit: int = 10
     ) -> list[MemoryItem]:
+        # Fetch more candidates than requested so we can re-rank after
+        # applying importance and recency weighting.
+        fetch_limit = min(limit * 3, 100)
         points = self._client.query_points(
             collection_name=self.COLLECTION_NAME,
-            query=embed_text(query),
-            limit=limit,
+            query=self._embedder.embed(query),
+            limit=fetch_limit,
             query_filter=qdrant_models.Filter(
                 must=[
                     qdrant_models.FieldCondition(
                         key="chat_session_id",
                         match=qdrant_models.MatchValue(value=_uuid_text(chat_session_id)),
-                    )
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="status",
+                        match=qdrant_models.MatchValue(value=MemoryStatus.ACTIVE.value),
+                    ),
                 ]
             ),
         ).points
 
-        items: list[MemoryItem] = []
+        now = datetime.now(UTC)
+        scored: list[tuple[float, MemoryItem]] = []
         for point in points:
             payload = point.payload or {}
             kind_raw = str(payload.get("kind", MemoryKind.SEMANTIC.value))
             kind = MemoryKind(kind_raw)
-            items.append(
-                MemoryItem(
-                    chat_session_id=chat_session_id,
-                    kind=kind,
-                    content=str(payload.get("content", "")),
-                    score=float(point.score) if point.score is not None else None,
-                )
+            importance = float(payload.get("importance", 0.5))
+            access_count = int(payload.get("access_count", 0))
+            last_accessed_raw = payload.get("last_accessed")
+            last_accessed = (
+                datetime.fromisoformat(last_accessed_raw)
+                if last_accessed_raw
+                else None
             )
-        return items
+            created_at_raw = payload.get("created_at")
+            created_at = (
+                datetime.fromisoformat(created_at_raw)
+                if created_at_raw
+                else now
+            )
+            status_raw = str(payload.get("status", MemoryStatus.ACTIVE.value))
+            try:
+                mem_status = MemoryStatus(status_raw)
+            except ValueError:
+                mem_status = MemoryStatus.ACTIVE
+
+            cosine_sim = float(point.score) if point.score is not None else 0.0
+            recency_ref = last_accessed or created_at
+            days_since = max(0.0, (now - recency_ref).total_seconds() / 86400)
+            recency_factor = math.exp(-0.01 * days_since)
+            final_score = cosine_sim * importance * recency_factor
+
+            item = MemoryItem(
+                chat_session_id=chat_session_id,
+                memory_id=UUID(str(point.id)) if point.id else None,
+                kind=kind,
+                content=str(payload.get("content", "")),
+                score=final_score,
+                importance=importance,
+                access_count=access_count,
+                last_accessed=last_accessed,
+                status=mem_status,
+                created_at=created_at,
+            )
+            scored.append((final_score, item))
+
+        scored.sort(key=lambda c: c[0], reverse=True)
+        return [item for _, item in scored[:limit]]
+
+    def update_access(self, *, memory_id: UUID) -> None:
+        """Increment access_count and update last_accessed for a memory."""
+        records, _ = self._client.scroll(
+            collection_name=self.COLLECTION_NAME,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.HasIdCondition(
+                        has_id=[_uuid_text(memory_id)],
+                    ),
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not records:
+            return
+        record = records[0]
+        payload = dict(record.payload or {})
+        payload["access_count"] = int(payload.get("access_count", 0)) + 1
+        payload["last_accessed"] = datetime.now(UTC).isoformat()
+        self._client.set_payload(
+            collection_name=self.COLLECTION_NAME,
+            payload=payload,
+            points=[_uuid_text(memory_id)],
+        )
+
+    def update_memory(
+        self, *, memory_id: UUID, importance: float | None = None,
+        status: MemoryStatus | None = None,
+    ) -> None:
+        """Update importance and/or status on an existing memory point."""
+        updates: dict[str, object] = {}
+        if importance is not None:
+            updates["importance"] = importance
+        if status is not None:
+            updates["status"] = status.value
+        if not updates:
+            return
+        self._client.set_payload(
+            collection_name=self.COLLECTION_NAME,
+            payload=updates,
+            points=[_uuid_text(memory_id)],
+        )
 
     def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]:
         records, _next_offset = self._client.scroll(
@@ -274,11 +360,32 @@ class QdrantVectorStore:
             payload = record.payload or {}
             kind_raw = str(payload.get("kind", MemoryKind.SEMANTIC.value))
             kind = MemoryKind(kind_raw)
+            last_accessed_raw = payload.get("last_accessed")
+            created_at_raw = payload.get("created_at")
+            status_raw = str(payload.get("status", MemoryStatus.ACTIVE.value))
+            try:
+                mem_status = MemoryStatus(status_raw)
+            except ValueError:
+                mem_status = MemoryStatus.ACTIVE
             items.append(
                 MemoryItem(
                     chat_session_id=chat_session_id,
+                    memory_id=UUID(str(record.id)) if record.id else None,
                     kind=kind,
                     content=str(payload.get("content", "")),
+                    importance=float(payload.get("importance", 0.5)),
+                    access_count=int(payload.get("access_count", 0)),
+                    last_accessed=(
+                        datetime.fromisoformat(last_accessed_raw)
+                        if last_accessed_raw
+                        else None
+                    ),
+                    status=mem_status,
+                    created_at=(
+                        datetime.fromisoformat(created_at_raw)
+                        if created_at_raw
+                        else datetime.now(UTC)
+                    ),
                 )
             )
         return items

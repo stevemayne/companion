@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -10,21 +11,26 @@ from typing import Protocol
 from uuid import UUID
 
 from app.analysis import ExtractionOutcome
+from app.consolidation import ConsolidationAgent
 from app.debug_trace import DebugTraceStore, build_trace_base
 from app.schemas import (
     CompanionAffect,
     GraphRelation,
     MemoryItem,
     MemoryKind,
+    MemoryStatus,
     Message,
     MonologueState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class AgentMetrics:
     extraction_jobs: int = 0
     reflector_jobs: int = 0
+    consolidation_jobs: int = 0
     failures: int = 0
 
 
@@ -34,6 +40,13 @@ class EpisodicStore(Protocol):
 
 class VectorStore(Protocol):
     def upsert_memory(self, item: MemoryItem) -> None: ...
+
+    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]: ...
+
+    def update_memory(
+        self, *, memory_id: UUID, importance: float | None = None,
+        status: MemoryStatus | None = None,
+    ) -> None: ...
 
 
 class GraphStore(Protocol):
@@ -72,6 +85,9 @@ class BackgroundAgentDispatcher:
         graph_store: GraphStore,
         monologue_store: MonologueStore,
         fact_extractor: FactExtractor,
+        consolidation_agent: ConsolidationAgent | None = None,
+        consolidation_interval: int = 10,
+        consolidation_message_window: int = 20,
         affect_refiner: AffectRefiner | None = None,
         debug_store: DebugTraceStore,
         enabled: bool = True,
@@ -81,6 +97,9 @@ class BackgroundAgentDispatcher:
         self._graph_store = graph_store
         self._monologue_store = monologue_store
         self._fact_extractor = fact_extractor
+        self._consolidation_agent = consolidation_agent
+        self._consolidation_interval = consolidation_interval
+        self._consolidation_message_window = consolidation_message_window
         self._affect_refiner = affect_refiner
         self._debug_store = debug_store
         self._enabled = enabled
@@ -89,6 +108,7 @@ class BackgroundAgentDispatcher:
         )
         self._lock = Lock()
         self._metrics: dict[UUID, AgentMetrics] = {}
+        self._turn_counts: dict[UUID, int] = {}
         self._futures: set[Future[None]] = set()
 
     def enqueue_turn(
@@ -109,6 +129,13 @@ class BackgroundAgentDispatcher:
             companion_name,
         )
         self._submit(self._run_reflector, chat_session_id)
+
+        if self._consolidation_agent is not None:
+            with self._lock:
+                count = self._turn_counts.get(chat_session_id, 0) + 1
+                self._turn_counts[chat_session_id] = count
+            if count % self._consolidation_interval == 0:
+                self._submit(self._run_consolidation, chat_session_id)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)
@@ -148,6 +175,7 @@ class BackgroundAgentDispatcher:
                         chat_session_id=chat_session_id,
                         kind=MemoryKind.SEMANTIC,
                         content=fact.text,
+                        importance=fact.importance,
                     )
                 )
 
@@ -245,6 +273,69 @@ class BackgroundAgentDispatcher:
                 chat_session_id=chat_session_id, failures=1,
             )
 
+    def _run_consolidation(self, chat_session_id: UUID) -> None:
+        assert self._consolidation_agent is not None
+        try:
+            messages = self._episodic_store.get_recent_messages(
+                chat_session_id=chat_session_id,
+                limit=self._consolidation_message_window,
+            )
+            existing = self._vector_store.list_memories(
+                chat_session_id=chat_session_id,
+            )
+            result = self._consolidation_agent.consolidate_session(
+                chat_session_id=chat_session_id,
+                messages=messages,
+                existing_memories=existing,
+            )
+
+            for r in result.reinforced:
+                self._vector_store.update_memory(
+                    memory_id=r.memory_id,
+                    importance=r.new_importance,
+                )
+            for s in result.superseded:
+                self._vector_store.update_memory(
+                    memory_id=s.memory_id,
+                    status=MemoryStatus.SUPERSEDED,
+                )
+                if s.replacement_text:
+                    self._vector_store.upsert_memory(MemoryItem(
+                        chat_session_id=chat_session_id,
+                        kind=MemoryKind.REFLECTIVE,
+                        content=s.replacement_text,
+                        importance=0.6,
+                    ))
+            for nf in result.new_facts:
+                self._vector_store.upsert_memory(MemoryItem(
+                    chat_session_id=chat_session_id,
+                    kind=MemoryKind.REFLECTIVE,
+                    content=nf.text,
+                    importance=nf.importance,
+                ))
+
+            trace = build_trace_base(chat_session_id=chat_session_id)
+            trace.update({
+                "agent": "consolidation",
+                "provider": result.provider,
+                "latency_ms": round(result.latency_ms, 2),
+                "reinforced": len(result.reinforced),
+                "superseded": len(result.superseded),
+                "new_facts": len(result.new_facts),
+            })
+            self._debug_store.add_trace(
+                chat_session_id=chat_session_id, trace=trace,
+            )
+            self._increment(
+                chat_session_id=chat_session_id, consolidation_jobs=1,
+            )
+        except Exception:
+            logger.warning(
+                "Consolidation failed for session %s",
+                chat_session_id, exc_info=True,
+            )
+            self._increment(chat_session_id=chat_session_id, failures=1)
+
     def _llm_refine_affect(
         self,
         *,
@@ -301,12 +392,14 @@ class BackgroundAgentDispatcher:
         chat_session_id: UUID,
         extraction_jobs: int = 0,
         reflector_jobs: int = 0,
+        consolidation_jobs: int = 0,
         failures: int = 0,
     ) -> None:
         with self._lock:
             metrics = self._metrics.setdefault(chat_session_id, AgentMetrics())
             metrics.extraction_jobs += extraction_jobs
             metrics.reflector_jobs += reflector_jobs
+            metrics.consolidation_jobs += consolidation_jobs
             metrics.failures += failures
 
 

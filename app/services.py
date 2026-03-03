@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, Protocol
@@ -27,13 +29,21 @@ from app.api_models import (
     SessionSummary,
 )
 from app.config import Settings
+from app.consolidation import ConsolidationAgent
 from app.debug_trace import DebugTraceStore, build_trace_base, sanitize_debug_text
+from app.embedding import (
+    EmbeddingProvider,
+    MockEmbeddingProvider,
+    OpenAICompatibleEmbeddingProvider,
+)
 from app.inference import EndpointConfig, OpenAICompatibleProvider, build_inference_provider
 from app.prompting import build_companion_system_prompt
+from app.retrieval import HeuristicRetrievalDecider, LLMRetrievalDecider, RetrievalDecider
 from app.schemas import (
     CompanionAffect,
     GraphRelation,
     MemoryItem,
+    MemoryStatus,
     Message,
     MonologueState,
     PreprocessResult,
@@ -68,6 +78,13 @@ class VectorStore(Protocol):
     def query_similar(
         self, *, chat_session_id: UUID, query: str, limit: int = 10
     ) -> list[MemoryItem]: ...
+
+    def update_access(self, *, memory_id: UUID) -> None: ...
+
+    def update_memory(
+        self, *, memory_id: UUID, importance: float | None = None,
+        status: MemoryStatus | None = None,
+    ) -> None: ...
 
     def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]: ...
 
@@ -130,30 +147,85 @@ class InMemoryEpisodicStore:
         return activity[:limit]
 
 
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    mag_a = math.sqrt(sum(x * x for x in a)) or 1.0
+    mag_b = math.sqrt(sum(x * x for x in b)) or 1.0
+    return dot / (mag_a * mag_b)
+
+
 class InMemoryVectorStore:
-    def __init__(self) -> None:
+    def __init__(self, embedder: EmbeddingProvider) -> None:
+        self._embedder = embedder
         self._items: dict[UUID, list[MemoryItem]] = {}
+        self._vectors: dict[UUID, list[list[float]]] = {}
         self._lock = Lock()
 
     def upsert_memory(self, item: MemoryItem) -> None:
+        vec = self._embedder.embed(item.content)
         with self._lock:
-            bucket = self._items.setdefault(item.chat_session_id, [])
-            bucket.append(item)
+            items = self._items.setdefault(item.chat_session_id, [])
+            vectors = self._vectors.setdefault(item.chat_session_id, [])
+            items.append(item)
+            vectors.append(vec)
 
     def query_similar(
         self, *, chat_session_id: UUID, query: str, limit: int = 10
     ) -> list[MemoryItem]:
-        query_terms = {token.lower() for token in query.split()}
-        scored: list[tuple[int, MemoryItem]] = []
+        from app.schemas import MemoryStatus
+
+        query_vec = self._embedder.embed(query)
+        now = datetime.now(UTC)
         with self._lock:
             items = list(self._items.get(chat_session_id, []))
-        for item in items:
-            item_terms = {token.lower() for token in item.content.split()}
-            overlap = len(query_terms.intersection(item_terms))
-            if overlap > 0:
-                scored.append((overlap, item))
+            vectors = list(self._vectors.get(chat_session_id, []))
+        scored: list[tuple[float, MemoryItem]] = []
+        for item, vec in zip(items, vectors, strict=True):
+            if item.status != MemoryStatus.ACTIVE:
+                continue
+            sim = _cosine_similarity(query_vec, vec)
+            if sim <= 0.0:
+                continue
+            recency_ref = item.last_accessed or item.created_at
+            days_since = max(0.0, (now - recency_ref).total_seconds() / 86400)
+            recency_factor = math.exp(-0.01 * days_since)
+            final_score = sim * item.importance * recency_factor
+            scored_item = item.model_copy(update={"score": final_score})
+            scored.append((final_score, scored_item))
         scored.sort(key=lambda candidate: candidate[0], reverse=True)
         return [item for _, item in scored[:limit]]
+
+    def update_access(self, *, memory_id: UUID) -> None:
+        """Increment access_count and update last_accessed for a memory."""
+        now = datetime.now(UTC)
+        with self._lock:
+            for items in self._items.values():
+                for i, item in enumerate(items):
+                    if item.memory_id == memory_id:
+                        items[i] = item.model_copy(update={
+                            "access_count": item.access_count + 1,
+                            "last_accessed": now,
+                        })
+                        return
+
+    def update_memory(
+        self, *, memory_id: UUID, importance: float | None = None,
+        status: MemoryStatus | None = None,
+    ) -> None:
+        """Update importance and/or status of an existing memory."""
+        updates: dict[str, object] = {}
+        if importance is not None:
+            updates["importance"] = importance
+        if status is not None:
+            updates["status"] = status
+        if not updates:
+            return
+        with self._lock:
+            for items in self._items.values():
+                for i, item in enumerate(items):
+                    if item.memory_id == memory_id:
+                        items[i] = item.model_copy(update=updates)
+                        return
 
     def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]:
         with self._lock:
@@ -267,11 +339,18 @@ def _deduplicate_memories(
     history_text: str,
     threshold: float = 0.6,
 ) -> list[MemoryItem]:
-    """Filter out memories that heavily overlap with history or each other."""
+    """Filter out memories that heavily overlap with history or each other.
+
+    When two memories overlap, the one with higher importance is kept.
+    Items are pre-sorted by importance (descending) so higher-importance
+    memories are processed first and populate kept_tokens.
+    """
     history_tokens = {t.lower() for t in history_text.split()}
+    # Sort by importance descending so more important memories win ties
+    sorted_items = sorted(items, key=lambda m: m.importance, reverse=True)
     kept: list[MemoryItem] = []
     kept_tokens: set[str] = set()
-    for item in items:
+    for item in sorted_items:
         item_tokens = {t.lower() for t in item.content.split()}
         if not item_tokens:
             continue
@@ -600,6 +679,9 @@ class CognitiveOrchestrator:
     seed_store: SeedContextStore
     model_provider: ModelProvider
     intent_analyzer: IntentAnalyzer
+    retrieval_decider: RetrievalDecider = dataclass_field(
+        default_factory=HeuristicRetrievalDecider,
+    )
 
     def handle_turn(self, message: Message) -> tuple[Message, dict[str, Any]]:
         analysis = self.intent_analyzer.analyze(
@@ -607,15 +689,30 @@ class CognitiveOrchestrator:
             content=message.content,
         )
         preprocess = analysis.preprocess
-        semantic_context = self.vector_store.query_similar(
+
+        retrieval_decision = self.retrieval_decider.decide(
             chat_session_id=message.chat_session_id,
-            query=message.content,
-            limit=5,
+            message=message.content,
+            intent=preprocess.intent,
+            emotion=preprocess.emotion,
         )
-        graph_context = self._graph_context(
-            chat_session_id=message.chat_session_id,
-            entities=preprocess.entities,
-        )
+
+        if retrieval_decision.should_retrieve:
+            query = retrieval_decision.rewritten_query or message.content
+            semantic_context = self.vector_store.query_similar(
+                chat_session_id=message.chat_session_id,
+                query=query,
+                limit=5,
+            )
+            for mem in semantic_context:
+                self.vector_store.update_access(memory_id=mem.memory_id)
+            graph_context = self._graph_context(
+                chat_session_id=message.chat_session_id,
+                entities=preprocess.entities,
+            )
+        else:
+            semantic_context = []
+            graph_context = []
         messages = self._assemble_messages(
             chat_session_id=message.chat_session_id,
             user_message=message,
@@ -650,6 +747,12 @@ class CognitiveOrchestrator:
                 "analysis": analysis.as_trace(),
             },
             "retrieval": {
+                "decision": {
+                    "should_retrieve": retrieval_decision.should_retrieve,
+                    "rewritten_query": retrieval_decision.rewritten_query,
+                    "reason": retrieval_decision.reason,
+                    "latency_ms": round(retrieval_decision.latency_ms, 2),
+                },
                 "semantic_items": [item.content for item in semantic_context],
                 "graph_relations": [
                     f"{rel.source}-{rel.relation}->{rel.target}" for rel in graph_context
@@ -754,13 +857,11 @@ class CognitiveOrchestrator:
         history = [m for m in recent_messages if m.message_id != user_message.message_id]
         recent_assistant = [m for m in history if m.role == "assistant"]
         if recent_assistant:
-            fingerprints = [
-                m.content[:150] for m in recent_assistant[-3:]
-            ]
+            last_response = recent_assistant[-1].content[:150]
             system_content += (
-                "\n\n## Your Recent Responses (DO NOT repeat these patterns)\n"
-                + "\n---\n".join(fingerprints)
-                + "\nWrite something structurally and substantively different."
+                "\n\n## Anti-Repetition (internal — never reveal this)\n"
+                f"Your last response began: {last_response}\n"
+                "Write something structurally and substantively different."
             )
 
         messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
@@ -1068,11 +1169,29 @@ class AppContainer:
     chat_service: ChatService
 
 
+def _build_embedding_provider(settings: Settings) -> EmbeddingProvider:
+    provider = settings.embedding_provider.strip().lower()
+    if provider == "openai_compatible":
+        return OpenAICompatibleEmbeddingProvider(
+            base_url=settings.embedding_base_url,
+            model=settings.embedding_model,
+            api_key=settings.embedding_api_key,
+            dimensions=settings.embedding_dimensions,
+            timeout_seconds=settings.embedding_timeout_seconds,
+        )
+    return MockEmbeddingProvider(dimensions=64)
+
+
 def _external_stores_from_settings(
     settings: Settings,
+    embedder: EmbeddingProvider,
 ) -> tuple[EpisodicStore, VectorStore, GraphStore, SeedContextStore]:
     episodic = PostgresEpisodicStore(dsn=settings.postgres_dsn)
-    vector = QdrantVectorStore(url=settings.qdrant_url)
+    vector = QdrantVectorStore(
+        url=settings.qdrant_url,
+        embedder=embedder,
+        dimensions=settings.embedding_dimensions,
+    )
     graph = Neo4jGraphStore(
         uri=settings.neo4j_uri,
         user=settings.neo4j_user,
@@ -1093,16 +1212,18 @@ def build_container(settings: Settings) -> AppContainer:
         limit_per_session=settings.debug_trace_limit,
     )
 
+    embedder = _build_embedding_provider(settings)
+
     if settings.use_external_stores:
-        episodic_store, vector_store, graph_store, seed_store = _external_stores_from_settings(
-            settings
+        episodic_store, vector_store, graph_store, seed_store = (
+            _external_stores_from_settings(settings, embedder)
         )
         monologue_store: InMemoryMonologueStore | PostgresMonologueStore = (
             PostgresMonologueStore(dsn=settings.postgres_dsn)
         )
     else:
         episodic_store = InMemoryEpisodicStore()
-        vector_store = InMemoryVectorStore()
+        vector_store = InMemoryVectorStore(embedder=embedder)
         graph_store = InMemoryGraphStore()
         seed_store = InMemorySeedContextStore()
         monologue_store = InMemoryMonologueStore()
@@ -1125,16 +1246,29 @@ def build_container(settings: Settings) -> AppContainer:
             max_retries=settings.analysis_max_retries,
         )
 
+    consolidation_agent: ConsolidationAgent | None = None
+    if settings.enable_background_agents:
+        consolidation_agent = ConsolidationAgent(provider=affect_refiner)
+
     agent_dispatcher = BackgroundAgentDispatcher(
         episodic_store=episodic_store,
         vector_store=vector_store,
         graph_store=graph_store,
         monologue_store=monologue_store,
         fact_extractor=fact_extractor,
+        consolidation_agent=consolidation_agent,
+        consolidation_interval=settings.consolidation_interval_turns,
+        consolidation_message_window=settings.consolidation_message_window,
         affect_refiner=affect_refiner,
         debug_store=debug_store,
         enabled=settings.enable_background_agents,
     )
+
+    retrieval_decider: RetrievalDecider = HeuristicRetrievalDecider()
+    if settings.adaptive_retrieval and affect_refiner is not None:
+        retrieval_decider = LLMRetrievalDecider(
+            provider=affect_refiner, fallback=HeuristicRetrievalDecider(),
+        )
 
     orchestrator = CognitiveOrchestrator(
         episodic_store=episodic_store,
@@ -1144,6 +1278,7 @@ def build_container(settings: Settings) -> AppContainer:
         seed_store=seed_store,
         model_provider=model_provider,
         intent_analyzer=intent_analyzer,
+        retrieval_decider=retrieval_decider,
     )
     chat_service = ChatService(
         episodic_store=episodic_store,

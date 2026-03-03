@@ -24,12 +24,23 @@ class MemoryKind(StrEnum):
     REFLECTIVE = "reflective"
 
 
+class MemoryStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    SUPERSEDED = "superseded"
+
+
 class MemoryItem(BaseModel):
     chat_session_id: UUID
     memory_id: UUID = Field(default_factory=uuid4)
     kind: MemoryKind
     content: str = Field(min_length=1)
     score: float | None = None
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+    last_accessed: datetime | None = None
+    access_count: int = Field(default=0, ge=0)
+    source_turn_id: UUID | None = None
+    status: MemoryStatus = MemoryStatus.ACTIVE
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

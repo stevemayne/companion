@@ -6,8 +6,16 @@ from app.config import get_settings
 
 
 @pytest.fixture(autouse=True)
-def force_mock_inference(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("INFERENCE_PROVIDER", "mock")
+def isolate_from_dotenv(monkeypatch: pytest.MonkeyPatch):
+    """Prevent .env from leaking into tests.
+
+    By pointing the env file at a nonexistent path, pydantic-settings
+    falls back to class defaults (which are already safe: mock inference,
+    in-memory stores, heuristic analysis, mock embeddings).  Tests that
+    pass explicit kwargs to Settings() get exactly what they ask for.
+    """
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
+    monkeypatch.setattr("app.config.Settings.model_config", {"env_file": ""})
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

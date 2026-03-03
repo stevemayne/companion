@@ -275,6 +275,7 @@ class ExtractedFact:
     predicate: str
     object: str
     text: str
+    importance: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -365,7 +366,11 @@ class HeuristicFactExtractor:
                 text = _to_declarative(sentence)
                 if text and text not in seen_texts:
                     seen_texts.add(text)
-                    facts.append(ExtractedFact(subject="User", predicate="", object="", text=text))
+                    importance = _heuristic_importance(sentence)
+                    facts.append(ExtractedFact(
+                        subject="User", predicate="", object="", text=text,
+                        importance=importance,
+                    ))
         facts = validate_facts(facts, companion_name)
         return ExtractionOutcome(
             facts=facts,
@@ -446,11 +451,15 @@ class LLMFactExtractor:
             "1. **facts** — structured triples about the user.\n"
             "2. **entities** — named people, pets, or organizations mentioned.\n\n"
             "## Fact rules\n"
-            "- Each fact must have: subject, predicate, object, text.\n"
+            "- Each fact must have: subject, predicate, object, text, importance.\n"
             "- subject: who performs the action (usually 'User').\n"
             "- predicate: the verb phrase ('argued with', 'is interested in', 'has').\n"
             "- object: the target of the action ('Sarah', 'magic', 'a cat named Luna').\n"
             "- text: a short declarative sentence rendering of the triple.\n"
+            "- importance: float 0.0-1.0 — how important this fact is for "
+            "understanding the user long-term. Relationships and core identity "
+            "(0.7-0.9), preferences and opinions (0.5-0.7), transient actions "
+            "and observations (0.2-0.4).\n"
             "- Focus on: personal details, preferences, relationships, events, "
             "emotions, plans, and opinions.\n"
             "- Pay careful attention to WHO does WHAT to WHOM. Preserve the direction "
@@ -473,7 +482,8 @@ class LLMFactExtractor:
             "  {\n"
             '    "facts": [\n'
             '      {"subject": "User", "predicate": "has sister who started", '
-            '"object": "a new job", "text": "User\'s sister Sarah started a new job"}\n'
+            '"object": "a new job", "text": "User\'s sister Sarah started a new job", '
+            '"importance": 0.7}\n'
             "    ],\n"
             '    "entities": [\n'
             '      {"name": "Sarah", "relationship": "sister", "aliases": ["sis"]}\n'
@@ -482,6 +492,28 @@ class LLMFactExtractor:
             f"User message: {user_message}\n"
             f"Assistant response: {assistant_message}"
         )
+
+
+_HIGH_IMPORTANCE_PATTERNS = re.compile(
+    r"\b(love|hate|afraid|scared|always|never|family|married|divorced|"
+    r"sister|brother|mother|father|daughter|son|wife|husband|partner|"
+    r"best friend|allergic|diagnosed|believe|religion|faith)\b",
+    re.IGNORECASE,
+)
+_MEDIUM_IMPORTANCE_PATTERNS = re.compile(
+    r"\b(like|enjoy|prefer|dislike|work|job|hobby|live|moved|"
+    r"friend|met|dating|relationship|plan|goal|dream)\b",
+    re.IGNORECASE,
+)
+
+
+def _heuristic_importance(sentence: str) -> float:
+    """Assign importance 0.0-1.0 based on sentence content."""
+    if _HIGH_IMPORTANCE_PATTERNS.search(sentence):
+        return 0.8
+    if _MEDIUM_IMPORTANCE_PATTERNS.search(sentence):
+        return 0.6
+    return 0.4
 
 
 def build_fact_extractor(settings: Settings) -> FactExtractor:
@@ -565,11 +597,16 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
             text = str(item.get("text", "")).strip()
             if not text:
                 text = f"{subject} {predicate} {obj}".strip()
+            raw_importance = item.get("importance")
+            try:
+                importance = max(0.0, min(1.0, float(raw_importance)))
+            except (TypeError, ValueError):
+                importance = 0.5
             if text and subject and text not in seen_texts:
                 seen_texts.add(text)
                 facts.append(ExtractedFact(
                     subject=subject, predicate=predicate,
-                    object=obj, text=text,
+                    object=obj, text=text, importance=importance,
                 ))
         elif isinstance(item, str):
             cleaned = item.strip()

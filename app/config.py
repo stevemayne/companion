@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     fallback_inference_base_url: str | None = None
     fallback_inference_api_key: str | None = None
 
+    embedding_provider: str = "mock"
+    embedding_model: str = "text-embedding-embeddinggemma-300m-qat"
+    embedding_base_url: str = "http://localhost:1234/v1"
+    embedding_api_key: str | None = None
+    embedding_dimensions: int = 768
+    embedding_timeout_seconds: float = 10.0
+
     analysis_provider: str = "heuristic"
     analysis_model: str | None = None
     analysis_base_url: str | None = None
@@ -39,7 +46,11 @@ class Settings(BaseSettings):
     analysis_timeout_seconds: float = 8.0
     analysis_max_retries: int = 1
 
+    adaptive_retrieval: bool = False
+
     enable_background_agents: bool = True
+    consolidation_interval_turns: int = 10
+    consolidation_message_window: int = 20
     enable_api_key_auth: bool = False
     service_api_key: str = "change-me"
     enable_rate_limit: bool = True

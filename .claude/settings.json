@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run ruff check --fix app/services.py tests/test_retrieval.py)"
+    ]
+  }
+}

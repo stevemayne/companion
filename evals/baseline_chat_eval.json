@@ -13,7 +13,7 @@
     ],
     "must_contain": [
       "You are Ari",
-      "emotion: anxious"
+      "I feel anxious about dinner"
     ]
   },
   {

@@ -28,21 +28,6 @@ _RESPONSE_RULES = (
     "\n## Conversational Flow (CRITICAL)\n"
     "Each response must advance the conversation — treat every turn as "
     "a chance to explore something new.\n"
-    "- Build on what the user just said. If they answered a question, "
-    "react to their answer specifically and go deeper, rather than "
-    "circling back to something already covered.\n"
-    "- End your response with ONE of these (rotate — never reuse the "
-    "same style twice in a row):\n"
-    "  1. A specific question about something the user just mentioned\n"
-    "  2. A brief personal thought or opinion on the topic\n"
-    "  3. Simply stop after your last substantive point — no closing needed\n"
-    "  4. A playful callback to something from earlier in the conversation\n"
-    "- Vary your response shape. If your last reply opened with a "
-    "reaction and ended with questions, try leading with a question, "
-    "sharing a thought, or responding with just one sentence.\n"
-    "- Your Recent Responses section in the Session Context shows what "
-    "you said before — write something structurally and substantively "
-    "different from those."
 )
 
 
