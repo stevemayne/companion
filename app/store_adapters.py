@@ -134,7 +134,8 @@ class PostgresMonologueStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT chat_session_id, internal_monologue, affect, updated_at
+                    SELECT chat_session_id, internal_monologue, affect,
+                           user_state, updated_at
                     FROM monologue_states
                     WHERE chat_session_id = %s
                     """,
@@ -145,11 +146,14 @@ class PostgresMonologueStore:
             return None
         affect_raw = row[2]
         affect = CompanionAffect.model_validate(affect_raw if affect_raw else {})
+        user_state_raw = row[3]
+        user_state = user_state_raw if isinstance(user_state_raw, list) else []
         return MonologueState(
             chat_session_id=row[0],
             internal_monologue=row[1],
             affect=affect,
-            updated_at=row[3],
+            user_state=user_state,
+            updated_at=row[4],
         )
 
     def upsert(self, state: MonologueState) -> MonologueState:
@@ -161,18 +165,21 @@ class PostgresMonologueStore:
                       chat_session_id,
                       internal_monologue,
                       affect,
+                      user_state,
                       updated_at
-                    ) VALUES (%s, %s, %s::jsonb, %s)
+                    ) VALUES (%s, %s, %s::jsonb, %s::jsonb, %s)
                     ON CONFLICT (chat_session_id)
                     DO UPDATE SET
                       internal_monologue = EXCLUDED.internal_monologue,
                       affect = EXCLUDED.affect,
+                      user_state = EXCLUDED.user_state,
                       updated_at = EXCLUDED.updated_at
                     """,
                     (
                         _uuid_text(state.chat_session_id),
                         state.internal_monologue,
                         json.dumps(state.affect.model_dump()),
+                        json.dumps(state.user_state),
                         state.updated_at,
                     ),
                 )

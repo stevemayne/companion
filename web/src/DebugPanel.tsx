@@ -132,6 +132,10 @@ export function DebugPanel(props: DebugPanelProps) {
                       {" "}trust={String((writes.affect as Record<string, unknown>).trust)}
                       {" "}comfort={String((writes.affect as Record<string, unknown>).comfort_level)}
                       {" "}engagement={String((writes.affect as Record<string, unknown>).engagement)}
+                      {" "}shyness={String((writes.affect as Record<string, unknown>).shyness)}
+                      {" "}patience={String((writes.affect as Record<string, unknown>).patience)}
+                      {" "}curiosity={String((writes.affect as Record<string, unknown>).curiosity)}
+                      {" "}vulnerability={String((writes.affect as Record<string, unknown>).vulnerability)}
                       {(() => {
                         const triggers = (writes.affect as Record<string, unknown>).recent_triggers as string[] | undefined;
                         return triggers && triggers.length > 0 ? ` triggers=[${triggers.join("; ")}]` : "";

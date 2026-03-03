@@ -204,6 +204,9 @@ class BackgroundAgentDispatcher:
             current_monologue = (
                 current.internal_monologue if current is not None else ""
             )
+            current_user_state = (
+                current.user_state if current is not None else []
+            )
 
             if self._affect_refiner is not None:
                 recent = self._episodic_store.get_recent_messages(
@@ -226,6 +229,7 @@ class BackgroundAgentDispatcher:
                     chat_session_id=chat_session_id,
                     internal_monologue=current_monologue,
                     affect=refined,
+                    user_state=current_user_state,
                 )
             )
             self._increment(
@@ -269,6 +273,11 @@ class BackgroundAgentDispatcher:
             "  trust (float 0 to 10)\n"
             "  attraction (float 0 to 10)\n"
             "  engagement (float 0 to 10)\n"
+            "  shyness (float 0 to 10, high=reserved/hesitant)\n"
+            "  patience (float 0 to 10)\n"
+            "  curiosity (float 0 to 10)\n"
+            "  vulnerability (float 0 to 10, willingness to share "
+            "deeper feelings)\n"
             "  recent_triggers (list of up to 3 short strings explaining "
             "what changed)\n\n"
             "Adjust values modestly — this is a refinement, not a reset. "

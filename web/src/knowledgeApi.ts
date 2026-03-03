@@ -23,6 +23,10 @@ export type CompanionAffect = {
   trust: number;
   attraction: number;
   engagement: number;
+  shyness: number;
+  patience: number;
+  curiosity: number;
+  vulnerability: number;
   recent_triggers: string[];
 };
 

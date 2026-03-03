@@ -263,9 +263,152 @@ class InMemorySeedContextStore:
         return contexts[:limit]
 
 
+def _deduplicate_memories(
+    items: list[MemoryItem],
+    *,
+    history_text: str,
+    threshold: float = 0.6,
+) -> list[MemoryItem]:
+    """Filter out memories that heavily overlap with history or each other."""
+    history_tokens = {t.lower() for t in history_text.split()}
+    kept: list[MemoryItem] = []
+    kept_tokens: set[str] = set()
+    for item in items:
+        item_tokens = {t.lower() for t in item.content.split()}
+        if not item_tokens:
+            continue
+        # Skip if most of this memory's words already appear in chat history
+        history_overlap = len(item_tokens & history_tokens) / len(item_tokens)
+        if history_overlap > threshold:
+            continue
+        # Skip if most of this memory's words already appear in kept memories
+        if kept_tokens:
+            kept_overlap = len(item_tokens & kept_tokens) / len(item_tokens)
+            if kept_overlap > threshold:
+                continue
+        kept.append(item)
+        kept_tokens |= item_tokens
+    return kept
+
+
+_SYCOPHANTIC_CLOSERS = re.compile(
+    r"[\.\!\?]?\s*"
+    r"(?:"
+    r"I'?m (?:always |right )?here (?:for you|if you need|whenever)"
+    r"|[Ww]e'?re in this together"
+    r"|I (?:truly |really )?(?:believe in|trust) you"
+    r"|[Yy]ou(?:'re| are) (?:not alone|amazing|incredible|so brave)"
+    r"|I trust you (?:completely|fully)"
+    r"|[Tt]his is going to be (?:amazing|wonderful|great|incredible)"
+    r"|I'?m so (?:glad|happy|grateful) you (?:shared|told me|opened up)"
+    r"|[Nn]ever forget (?:how|that) (?:special|strong|brave)"
+    r"|[Rr]emember,? I'?m (?:always )?here"
+    r"|[Yy]ou can always (?:count on|talk to|reach out)"
+    r"|I (?:can'?t wait|am so excited) to see"
+    r"|[Tt]ogether,? we (?:can|will)"
+    r")"
+    r"[\.\!\s]*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_sycophantic_closer(text: str) -> str:
+    """Remove generic sycophantic closing formula from response."""
+    cleaned = _SYCOPHANTIC_CLOSERS.sub("", text).rstrip()
+    # Don't strip if it would gut most of the response
+    if len(cleaned) < len(text) * 0.3:
+        return text
+    return cleaned if cleaned else text
+
+
+# Patterns that indicate leaked internal state in the response.
+_LEAKED_STATE_PATTERNS = [
+    # Bracketed emotional/internal state blocks:
+    #   [Emotional state: ...], [Current mood: ...], [Internal: ...], etc.
+    re.compile(
+        r"\[(?:Emotional state|Current mood|Internal(?: state)?|Affect"
+        r"|Session [Cc]ontext|Inner state|Detected intent)[:\s][^\]]*\]",
+        re.IGNORECASE,
+    ),
+    # Affect metrics with /10 scales leaked inline:
+    #   trust 4.7/10, engagement 8.2/10, etc.
+    re.compile(
+        r"(?:trust|comfort|attraction|engagement|shyness|patience"
+        r"|curiosity|vulnerability|arousal|valence)\s*[:=]?\s*"
+        r"-?\d+\.?\d*/10",
+        re.IGNORECASE,
+    ),
+    # Session context section headers that leaked into prose:
+    re.compile(
+        r"##\s*(?:Your Inner Emotional State|Session Context|"
+        r"Your Recent Responses|User's Described State|"
+        r"Anti-Repetition|Conversational Flow)[^\n]*",
+        re.IGNORECASE,
+    ),
+    # "Detected intent: ...; emotion: ..." line
+    re.compile(r"Detected intent:\s*\w+;\s*emotion:\s*\w+", re.IGNORECASE),
+    # "Relevant memories: ..." or "Relationships: ..." context lines
+    re.compile(r"(?:Relevant memories|Relationships|Internal reflection):\s*.+", re.IGNORECASE),
+]
+
+
+def _strip_leaked_state(text: str) -> str:
+    """Remove any internal session context that leaked into the response."""
+    cleaned = text
+    for pattern in _LEAKED_STATE_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    # Collapse any resulting double-blank-lines or trailing whitespace
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    # Don't return an empty or gutted response
+    if len(cleaned) < len(text) * 0.3:
+        return text
+    return cleaned if cleaned else text
+
+
 _HOSTILITY_TERMS = {"hate", "shut up", "stupid", "annoying", "useless", "idiot"}
 _WARMTH_TERMS = {"love", "trust", "appreciate", "grateful", "thank", "missed you", "care"}
 _WITHDRAWAL_TERMS = {"leave me alone", "don't want to talk", "go away", "whatever"}
+
+_USER_STATE_KEYWORDS = {
+    "wear", "wearing", "put on", "take off", "dress", "dressed",
+    "change into", "slip into", "pull on", "throw on",
+    "sit", "sitting", "stand", "standing", "walk", "walking",
+    "hold", "holding", "carry", "carrying", "pick up",
+    "arrive", "arriving", "leave", "leaving", "head to", "move to",
+    "step", "lean", "leaning", "grab", "reach", "kneel", "kneeling",
+    "lie down", "lying", "look at", "looking at",
+    "adjust", "straighten", "smooth", "fix", "tuck",
+}
+
+_MAX_USER_STATE_ENTRIES = 8
+
+
+def _extract_user_state(content: str) -> list[str]:
+    """Extract sentences where the user describes their own physical actions or state."""
+    sentences = re.split(r"(?<=[.!?])\s+|\n", content.strip())
+    results: list[str] = []
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        lowered = s.lower()
+        if not re.match(r"^(?:i\b|let me\b)", lowered):
+            continue
+        if any(kw in lowered for kw in _USER_STATE_KEYWORDS):
+            results.append(s.rstrip(".!? "))
+    return results
+
+
+def _build_user_context_block(user_state: list[str]) -> str:
+    """Render tracked user state as a prompt section."""
+    lines = [
+        "## User's Described State"
+        " (what the user has said about their own actions/appearance — "
+        "these apply to THE USER, never to you)",
+    ]
+    for item in user_state:
+        lines.append(f"- {item}")
+    return "\n".join(lines)
 
 
 def _heuristic_affect_update(
@@ -278,16 +421,32 @@ def _heuristic_affect_update(
     """Apply fast heuristic deltas to affect state. No LLM call."""
     lowered = message_content.lower()
 
-    # Decay ~5% toward baseline each turn to prevent runaway states.
-    baseline_engagement = 5.0
-    decay = 0.05
+    # Decay 15% toward baseline each turn to prevent saturation.
+    decay = 0.15
+    baselines = {
+        "engagement": 5.0,
+        "comfort_level": 3.0,
+        "trust": 3.0,
+        "attraction": 3.0,
+        "shyness": 6.0,
+        "patience": 7.0,
+        "curiosity": 6.0,
+        "vulnerability": 2.0,
+    }
 
-    engagement = current.engagement + decay * (baseline_engagement - current.engagement)
+    def _decay(current_val: float, baseline: float) -> float:
+        return current_val + decay * (baseline - current_val)
+
+    engagement = _decay(current.engagement, baselines["engagement"])
+    comfort_level = _decay(current.comfort_level, baselines["comfort_level"])
+    trust = _decay(current.trust, baselines["trust"])
+    attraction = _decay(current.attraction, baselines["attraction"])
+    shyness = _decay(current.shyness, baselines["shyness"])
+    patience = _decay(current.patience, baselines["patience"])
+    curiosity = _decay(current.curiosity, baselines["curiosity"])
+    vulnerability = _decay(current.vulnerability, baselines["vulnerability"])
     valence = current.valence * (1.0 - decay)
-    comfort_level = current.comfort_level
-    trust = current.trust
-    attraction = current.attraction
-    arousal = current.arousal
+    arousal = current.arousal * (1.0 - decay) + 0.3 * decay  # decay toward 0.3
     triggers: list[str] = []
 
     # Emotion signals
@@ -295,36 +454,48 @@ def _heuristic_affect_update(
         valence -= 0.1
         arousal += 0.15
         comfort_level = max(0.0, comfort_level - 0.3)
+        patience += 0.2  # more patient when user is anxious
+        vulnerability += 0.3  # opens up empathetically
         triggers.append("user expressed anxiety")
     elif emotion == "positive":
         valence += 0.1
         engagement = min(10.0, engagement + 0.5)
+        shyness = max(0.0, shyness - 0.2)  # less shy with positive vibes
+        curiosity += 0.2  # encouraged to explore
         triggers.append("user expressed positive feeling")
 
     # Intent signals
     if intent == "question":
         engagement = min(10.0, engagement + 0.3)
+        curiosity += 0.3  # questions spark curiosity
 
     # Lexical signals for interpersonal dynamics
     if any(term in lowered for term in _HOSTILITY_TERMS):
         valence -= 0.2
         trust = max(0.0, trust - 0.5)
         attraction = max(0.0, attraction - 0.3)
+        shyness = min(10.0, shyness + 0.5)  # retreats
+        patience = max(0.0, patience - 0.4)
+        vulnerability = max(0.0, vulnerability - 0.3)  # closes off
         triggers.append("hostile language detected")
     if any(term in lowered for term in _WARMTH_TERMS):
         valence += 0.15
-        trust = min(10.0, trust + 0.3)
-        attraction = min(10.0, attraction + 0.2)
+        trust = min(10.0, trust + 0.2)
+        attraction = min(10.0, attraction + 0.15)
+        shyness = max(0.0, shyness - 0.3)  # warms up
+        vulnerability += 0.2  # opens up
         triggers.append("warm/affectionate language")
     if any(term in lowered for term in _WITHDRAWAL_TERMS):
         engagement = max(0.0, engagement - 1.0)
         arousal = max(0.0, arousal - 0.1)
+        shyness = min(10.0, shyness + 0.3)  # becomes more reserved
+        patience += 0.2  # gives space
         triggers.append("user signaling withdrawal")
 
-    # Slow trust/comfort buildup on normal interactions
+    # Slow buildup on normal interactions (reduced from 0.1/0.05)
     if not triggers:
-        comfort_level = min(10.0, comfort_level + 0.1)
-        trust = min(10.0, trust + 0.05)
+        comfort_level = min(10.0, comfort_level + 0.03)
+        trust = min(10.0, trust + 0.02)
 
     # Clamp all values
     valence = max(-1.0, min(1.0, valence))
@@ -333,6 +504,10 @@ def _heuristic_affect_update(
     trust = max(0.0, min(10.0, trust))
     attraction = max(0.0, min(10.0, attraction))
     engagement = max(0.0, min(10.0, engagement))
+    shyness = max(0.0, min(10.0, shyness))
+    patience = max(0.0, min(10.0, patience))
+    curiosity = max(0.0, min(10.0, curiosity))
+    vulnerability = max(0.0, min(10.0, vulnerability))
 
     mood = _derive_mood(valence=valence, arousal=arousal, triggers=triggers)
 
@@ -344,6 +519,10 @@ def _heuristic_affect_update(
         trust=round(trust, 2),
         attraction=round(attraction, 2),
         engagement=round(engagement, 2),
+        shyness=round(shyness, 2),
+        patience=round(patience, 2),
+        curiosity=round(curiosity, 2),
+        vulnerability=round(vulnerability, 2),
         recent_triggers=triggers[-3:],
     )
 
@@ -366,7 +545,7 @@ def _derive_mood(*, valence: float, arousal: float, triggers: list[str]) -> str:
     if valence < -0.3 and arousal > 0.5:
         return "anxious"
     if valence < -0.3:
-        return "concerned"
+        return "wary"
     if arousal < 0.2:
         return "withdrawn"
     return "curious"
@@ -384,13 +563,18 @@ def _build_affect_block(affect: CompanionAffect) -> str:
         f"Trust in user: {affect.trust:.1f}/10",
         f"Attraction: {affect.attraction:.1f}/10",
         f"Engagement: {affect.engagement:.1f}/10",
+        f"Shyness: {affect.shyness:.1f}/10 (high=reserved/hesitant, low=bold/forward)",
+        f"Patience: {affect.patience:.1f}/10",
+        f"Curiosity: {affect.curiosity:.1f}/10",
+        f"Vulnerability: {affect.vulnerability:.1f}/10 (willingness to share deeper feelings)",
     ]
     if affect.recent_triggers:
         lines.append(f"Recent factors: {'; '.join(affect.recent_triggers)}")
     lines.append(
         "Let this inner state naturally color your responses — "
         "low comfort means more reserved, low trust means cautious, "
-        "high engagement means genuine curiosity. "
+        "high shyness means shorter and more tentative replies, "
+        "high curiosity means asking follow-up questions. "
         "Do not mention these numbers or states directly."
     )
     return "\n".join(lines)
@@ -436,6 +620,8 @@ class CognitiveOrchestrator:
             chat_session_id=message.chat_session_id,
             response=response,
         )
+        response = _strip_leaked_state(response)
+        response = _strip_sycophantic_closer(response)
 
         assistant_message = Message(
             chat_session_id=message.chat_session_id,
@@ -513,7 +699,11 @@ class CognitiveOrchestrator:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
         companion_system_prompt = build_companion_system_prompt(seed_context)
 
-        semantic_excerpt = " | ".join(item.content for item in semantic_context)
+        history_text = " ".join(m.content for m in recent_messages[-20:])
+        deduped_context = _deduplicate_memories(
+            semantic_context, history_text=history_text,
+        )
+        semantic_excerpt = " | ".join(item.content for item in deduped_context)
         graph_excerpt = " | ".join(
             f"{rel.source}-{rel.relation}->{rel.target}" for rel in graph_context
         )
@@ -524,10 +714,13 @@ class CognitiveOrchestrator:
             monologue_text = None
 
         affect = monologue.affect if monologue is not None else None
+        user_state = monologue.user_state if monologue is not None else []
 
         context_parts: list[str] = []
         if affect is not None:
             context_parts.append(_build_affect_block(affect))
+        if user_state:
+            context_parts.append(_build_user_context_block(user_state))
         if monologue_text:
             context_parts.append(f"Internal reflection: {monologue_text}")
         if semantic_excerpt:
@@ -545,13 +738,47 @@ class CognitiveOrchestrator:
                 + "\n".join(context_parts)
             )
 
+        # Build a fingerprint of recent assistant responses so the model
+        # knows explicitly what phrasings/patterns to avoid repeating.
+        history = [m for m in recent_messages if m.message_id != user_message.message_id]
+        recent_assistant = [m for m in history if m.role == "assistant"]
+        if recent_assistant:
+            fingerprints = [
+                m.content[:150] for m in recent_assistant[-3:]
+            ]
+            system_content += (
+                "\n\n## Your Recent Responses (DO NOT repeat these patterns)\n"
+                + "\n---\n".join(fingerprints)
+                + "\nWrite something structurally and substantively different."
+            )
+
         messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
 
         # Add conversation history as proper turns, excluding the current
         # user message (which was already appended to the store before this
-        # method is called).
-        history = [m for m in recent_messages if m.message_id != user_message.message_id]
-        for msg in history[-20:]:
+        # method is called).  Truncate older assistant messages to a short
+        # summary so the model doesn't over-condition on its own phrasing
+        # (context pollution).  Keep the last VERBATIM_TURNS assistant
+        # messages intact for conversational coherence.
+        VERBATIM_TURNS = 2
+        window = history[-20:]
+        assistant_count_from_end = 0
+        for i in range(len(window) - 1, -1, -1):
+            if window[i].role == "assistant":
+                assistant_count_from_end += 1
+                if assistant_count_from_end > VERBATIM_TURNS:
+                    # Replace older assistant messages with a brief summary
+                    truncated = window[i].content[:80].rstrip()
+                    if len(window[i].content) > 80:
+                        truncated += "…"
+                    window[i] = Message(
+                        chat_session_id=window[i].chat_session_id,
+                        message_id=window[i].message_id,
+                        role="assistant",
+                        content=f"[Earlier response: {truncated}]",
+                        created_at=window[i].created_at,
+                    )
+        for msg in window:
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": user_message.content})
@@ -624,10 +851,19 @@ class CognitiveOrchestrator:
             intent=preprocess.intent,
             message_content=message.content,
         )
+
+        # Track user-described physical state (appearance, actions, location)
+        prev_user_state = (
+            current_state.user_state if current_state is not None else []
+        )
+        new_descriptions = _extract_user_state(message.content)
+        user_state = (prev_user_state + new_descriptions)[-_MAX_USER_STATE_ENTRIES:]
+
         monologue_state = MonologueState(
             chat_session_id=message.chat_session_id,
             internal_monologue=reflection,
             affect=new_affect,
+            user_state=user_state,
         )
         self.monologue_store.upsert(monologue_state)
         return {

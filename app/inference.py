@@ -37,11 +37,19 @@ class OpenAICompatibleProvider:
         endpoint: EndpointConfig,
         timeout_seconds: float,
         max_retries: int,
+        temperature: float = 0.75,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        max_tokens: int | None = None,
         client: httpx.Client | None = None,
     ) -> None:
         self._endpoint = endpoint
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
+        self._temperature = temperature
+        self._frequency_penalty = frequency_penalty
+        self._presence_penalty = presence_penalty
+        self._max_tokens = max_tokens
         self._client = client or httpx.Client(timeout=timeout_seconds)
 
     def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str:
@@ -65,14 +73,20 @@ class OpenAICompatibleProvider:
         if self._endpoint.api_key:
             headers["Authorization"] = f"Bearer {self._endpoint.api_key}"
 
+        body: dict[str, object] = {
+            "model": self._endpoint.model,
+            "messages": messages,
+            "temperature": self._temperature,
+            "frequency_penalty": self._frequency_penalty,
+            "presence_penalty": self._presence_penalty,
+        }
+        if self._max_tokens is not None:
+            body["max_tokens"] = self._max_tokens
+
         response = self._client.post(
             f"{self._endpoint.base_url.rstrip('/')}/chat/completions",
             headers=headers,
-            json={
-                "model": self._endpoint.model,
-                "messages": messages,
-                "temperature": 0.4,
-            },
+            json=body,
             timeout=self._timeout_seconds,
         )
         response.raise_for_status()
@@ -111,6 +125,10 @@ def build_inference_provider(settings: Settings) -> Any:
         ),
         timeout_seconds=settings.inference_timeout_seconds,
         max_retries=settings.inference_max_retries,
+        temperature=settings.inference_temperature,
+        frequency_penalty=settings.inference_frequency_penalty,
+        presence_penalty=settings.inference_presence_penalty,
+        max_tokens=settings.inference_max_tokens,
     )
 
     if not settings.inference_failover_enabled:
@@ -130,6 +148,10 @@ def build_inference_provider(settings: Settings) -> Any:
         ),
         timeout_seconds=settings.inference_timeout_seconds,
         max_retries=settings.inference_max_retries,
+        temperature=settings.inference_temperature,
+        frequency_penalty=settings.inference_frequency_penalty,
+        presence_penalty=settings.inference_presence_penalty,
+        max_tokens=settings.inference_max_tokens,
     )
     return FailoverInferenceProvider(primary=primary, secondary=secondary)
 

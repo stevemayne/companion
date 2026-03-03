@@ -34,6 +34,10 @@ export function AffectPanel({ affect }: AffectPanelProps) {
     { label: "Comfort", value: affect.comfort_level, max: 10, color: "#5a9a54" },
     { label: "Attraction", value: affect.attraction, max: 10, color: "#b5564a" },
     { label: "Engagement", value: affect.engagement, max: 10, color: "#b5994a" },
+    { label: "Shyness", value: affect.shyness, max: 10, color: "#7a8ab5" },
+    { label: "Patience", value: affect.patience, max: 10, color: "#5ab58a" },
+    { label: "Curiosity", value: affect.curiosity, max: 10, color: "#b5804a" },
+    { label: "Vulnerability", value: affect.vulnerability, max: 10, color: "#b54a7a" },
     { label: "Arousal", value: affect.arousal, max: 1, color: "#8a5ab5" },
   ];
 

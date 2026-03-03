@@ -56,6 +56,10 @@ class CompanionAffect(BaseModel):
     trust: float = Field(default=3.0, ge=0.0, le=10.0)
     attraction: float = Field(default=3.0, ge=0.0, le=10.0)
     engagement: float = Field(default=5.0, ge=0.0, le=10.0)
+    shyness: float = Field(default=6.0, ge=0.0, le=10.0)
+    patience: float = Field(default=7.0, ge=0.0, le=10.0)
+    curiosity: float = Field(default=6.0, ge=0.0, le=10.0)
+    vulnerability: float = Field(default=2.0, ge=0.0, le=10.0)
     recent_triggers: list[str] = Field(default_factory=list)
 
 
@@ -63,6 +67,7 @@ class MonologueState(BaseModel):
     chat_session_id: UUID
     internal_monologue: str = Field(default="")
     affect: CompanionAffect = Field(default_factory=CompanionAffect)
+    user_state: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

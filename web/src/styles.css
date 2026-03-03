@@ -78,12 +78,29 @@ body {
   gap: 10px;
 }
 
+.drawer-panel-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .drawer-panel-host > .panel {
   background: transparent;
   border: none;
   border-radius: 0;
   padding: 0;
   backdrop-filter: none;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-panel-host .messages {
+  max-height: none !important;
+  flex: 1;
+  min-height: 0;
 }
 
 /* ===== Topbar ===== */

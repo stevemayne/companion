@@ -286,6 +286,12 @@ class ExtractionOutcome:
     entities: list[EntityMention] = field(default_factory=list)
 
 
+_ASSISTANT_SUBJECTS = {
+    "assistant", "the assistant", "ai", "the ai",
+    "companion", "the companion",
+}
+
+
 def validate_facts(
     facts: list[ExtractedFact],
     companion_name: str | None = None,
@@ -296,7 +302,19 @@ def validate_facts(
     for fact in facts:
         if not fact.subject.strip() or not fact.text.strip():
             continue
-        if companion_lower and fact.subject.strip().lower() == companion_lower:
+        subject_lower = fact.subject.strip().lower()
+        # Never store facts about the assistant/companion
+        if subject_lower in _ASSISTANT_SUBJECTS:
+            continue
+        if companion_lower and subject_lower == companion_lower:
+            continue
+        # Reject facts whose text is primarily about the assistant
+        text_lower = fact.text.strip().lower()
+        if text_lower.startswith(("the assistant ", "assistant ")):
+            continue
+        if companion_lower and text_lower.startswith(
+            (f"the {companion_lower} ", f"{companion_lower} ")
+        ):
             continue
         if fact.text in seen_texts:
             continue
@@ -420,7 +438,9 @@ class LLMFactExtractor:
             "- Pay careful attention to WHO does WHAT to WHOM. Preserve the direction "
             "of the relationship exactly as stated.\n"
             f"{companion_rule}"
-            "- Do NOT extract facts about the assistant or general knowledge.\n"
+            "- NEVER extract facts about the assistant, what the assistant said, "
+            "felt, imagined, or did. Only extract facts about the USER. "
+            "If a fact's subject would be 'Assistant' or 'The Assistant', skip it.\n"
             "- Do NOT include greetings, filler, or questions.\n\n"
             "## Entity rules\n"
             "- Each entity must have: name (canonical form), relationship (to the user: "

@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     inference_api_key: str | None = None
     inference_timeout_seconds: float = 30.0
     inference_max_retries: int = 2
+    inference_temperature: float = 0.75
+    inference_frequency_penalty: float = 0.4
+    inference_presence_penalty: float = 0.3
+    inference_max_tokens: int = 512
     inference_failover_enabled: bool = False
     fallback_inference_model: str | None = None
     fallback_inference_base_url: str | None = None
