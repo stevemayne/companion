@@ -292,7 +292,7 @@ def _deduplicate_memories(
 
 
 _SYCOPHANTIC_CLOSERS = re.compile(
-    r"[\.\!\?]?\s*"
+    r"[.\!?]?\s*"
     r"(?:"
     r"I'?m (?:always |right )?here (?:for you|if you need|whenever)"
     r"|[Ww]e'?re in this together"
@@ -307,7 +307,8 @@ _SYCOPHANTIC_CLOSERS = re.compile(
     r"|I (?:can'?t wait|am so excited) to see"
     r"|[Tt]ogether,? we (?:can|will)"
     r")"
-    r"[\.\!\s]*$",
+    r"[^.!?\n]*"  # consume rest of the sentence after the trigger
+    r"[.!?\s]*$",
     re.IGNORECASE,
 )
 
@@ -359,10 +360,10 @@ def _strip_leaked_state(text: str) -> str:
         cleaned = pattern.sub("", cleaned)
     # Collapse any resulting double-blank-lines or trailing whitespace
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    # Don't return an empty or gutted response
-    if len(cleaned) < len(text) * 0.3:
+    # Keep the cleaned version as long as some real content remains
+    if not cleaned or len(cleaned) < 10:
         return text
-    return cleaned if cleaned else text
+    return cleaned
 
 
 _HOSTILITY_TERMS = {"hate", "shut up", "stupid", "annoying", "useless", "idiot"}

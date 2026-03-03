@@ -357,8 +357,9 @@ def test_user_state_persisted_across_turns() -> None:
     )
     assert resp.status_code == 200
     content = resp.json()["assistant_message"]["content"]
-    assert "User's Described State" in content
-    assert "suit" in content.lower()
+    # The actual user state content should be present (the section header
+    # gets stripped by _strip_leaked_state, but the item text remains).
+    assert "smart suit" in content.lower()
 
 
 # ---------------------------------------------------------------------------
