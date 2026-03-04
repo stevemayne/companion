@@ -17,6 +17,9 @@ function relationLabel(rel: GraphRelation): string {
 export function KnowledgePanel(props: KnowledgePanelProps) {
   const { isOpen, onToggleOpen, onRefresh, facts, graph, monologue, status } = props;
 
+  const userFacts = facts.filter((f) => f.kind !== "companion");
+  const companionFacts = facts.filter((f) => f.kind === "companion");
+
   // Group graph relations by type for readability
   const byType: Record<string, GraphRelation[]> = {};
   for (const rel of graph) {
@@ -40,11 +43,11 @@ export function KnowledgePanel(props: KnowledgePanelProps) {
         </div>
       </div>
       <div className="meta">
-        {status} · {facts.length} facts · {graph.length} relations
+        {status} · {userFacts.length} facts · {companionFacts.length} self-facts · {graph.length} relations
       </div>
 
       {isOpen && (
-        <div style={{ maxHeight: 320, overflowY: "auto", marginTop: 8 }}>
+        <div className="knowledge-scroll">
           {monologue && (
             <div className="knowledge-section" style={{ marginTop: 0 }}>
               <div className="knowledge-heading">Internal Monologue</div>
@@ -53,14 +56,25 @@ export function KnowledgePanel(props: KnowledgePanelProps) {
           )}
 
           <div className="knowledge-section">
-            <div className="knowledge-heading">Facts ({facts.length})</div>
-            {facts.length === 0 && <div className="meta">No facts extracted yet.</div>}
-            {facts.map((fact, idx) => (
+            <div className="knowledge-heading">Facts ({userFacts.length})</div>
+            {userFacts.length === 0 && <div className="meta">No facts extracted yet.</div>}
+            {userFacts.map((fact, idx) => (
               <div key={fact.memory_id ?? idx} className="knowledge-item fact">
                 {fact.content}
               </div>
             ))}
           </div>
+
+          {companionFacts.length > 0 && (
+            <div className="knowledge-section">
+              <div className="knowledge-heading">Companion Self-Facts ({companionFacts.length})</div>
+              {companionFacts.map((fact, idx) => (
+                <div key={fact.memory_id ?? idx} className="knowledge-item companion">
+                  {fact.content}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="knowledge-section">
             <div className="knowledge-heading">Graph ({graph.length})</div>

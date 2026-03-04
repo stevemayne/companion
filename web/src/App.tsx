@@ -153,6 +153,13 @@ export function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seedDraft));
   }, [seedDraft]);
 
+  // Bootstrap seed for the initial session on mount
+  useEffect(() => {
+    void bootstrapSeed(sessionId);
+    void refreshSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
   }, [messages, pendingAssistant, isStreaming]);
@@ -261,9 +268,8 @@ export function App() {
         setSeedDraft(toDraft(memory.seed_context.seed, memory.seed_context.user_description ?? "", memory.seed_context.notes ?? DEFAULT_NOTES));
         setSeedStatus("seeded");
       } else {
-        setSeedStatus("not seeded");
-        setSidebarOpen(true);
-        setSidebarTab("profile");
+        // Apply default seed so companion_name is always available
+        await bootstrapSeed(targetSessionId);
       }
       setStatus("idle");
       setSidebarOpen(false);

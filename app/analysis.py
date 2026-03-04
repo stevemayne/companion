@@ -522,6 +522,7 @@ class ExtractionOutcome:
     fallback_reason: str | None
     latency_ms: float
     entities: list[EntityMention] = field(default_factory=list)
+    companion_facts: list[ExtractedFact] = field(default_factory=list)
 
 
 _ASSISTANT_SUBJECTS = {
@@ -532,6 +533,31 @@ _ASSISTANT_SUBJECTS = {
     "companion",
     "the companion",
 }
+
+
+def _partition_facts(
+    facts: list[ExtractedFact],
+    companion_name: str | None,
+) -> tuple[list[ExtractedFact], list[ExtractedFact]]:
+    """Split facts into (user_facts, companion_facts) based on subject."""
+    companion_lower = companion_name.strip().lower() if companion_name else None
+    user_facts: list[ExtractedFact] = []
+    companion_facts: list[ExtractedFact] = []
+    seen_texts: set[str] = set()
+    for fact in facts:
+        if not fact.text.strip():
+            continue
+        if fact.text in seen_texts:
+            continue
+        seen_texts.add(fact.text)
+        subject_lower = fact.subject.strip().lower()
+        if companion_lower and subject_lower == companion_lower:
+            companion_facts.append(fact)
+        elif subject_lower in _ASSISTANT_SUBJECTS:
+            continue  # reject generic "assistant"/"ai" subjects
+        else:
+            user_facts.append(fact)
+    return user_facts, companion_facts
 
 
 def validate_facts(
@@ -663,14 +689,19 @@ class LLMFactExtractor:
                     },
                 ],
             )
-            facts, entities = _parse_extraction_payload(raw)
-            facts = validate_facts(
-                facts,
+            all_facts, entities = _parse_extraction_payload(raw)
+            effective_name = companion_name or "Companion"
+            user_facts, companion_facts = _partition_facts(
+                all_facts, effective_name,
+            )
+            user_facts = validate_facts(
+                user_facts,
                 companion_name,
                 assistant_message=assistant_message,
             )
             return ExtractionOutcome(
-                facts=facts,
+                facts=user_facts,
+                companion_facts=companion_facts,
                 requested_provider="llm",
                 used_provider="llm",
                 fallback_reason=None,
@@ -698,150 +729,81 @@ class LLMFactExtractor:
         assistant_message: str,
         companion_name: str | None,
     ) -> str:
-        companion_rule = ""
-        if companion_name:
-            companion_rule = (
-                f"- The assistant in this conversation is named '{companion_name}'. "
-                f"'{companion_name}' must NEVER appear as a fact subject. "
-                f"If '{companion_name}' is involved, place them in the object field.\n"
-            )
+        name = companion_name or "Companion"
         return (
-            "You are a fact and entity extraction system. Given a user message and an "
-            "assistant response, extract two things:\n\n"
-            "1. **facts** — structured triples about the user.\n"
-            "2. **entities** — named people, pets, or organizations mentioned.\n\n"
+            "You are a fact and entity extraction system for a conversation "
+            f"between a user and a companion named '{name}'.\n\n"
+            "Given a conversation turn, extract facts from BOTH speakers "
+            "and any named entities mentioned.\n\n"
             "## Fact rules\n"
             "- Each fact must have: subject, predicate, object, text, importance.\n"
-            "- subject: who performs the action (usually 'User').\n"
-            "- predicate: the verb phrase ('argued with', 'is interested in', 'has').\n"
-            "- object: the target of the action ('Sarah', 'magic', 'a cat named Luna').\n"
-            "- text: a short declarative sentence rendering of the triple.\n"
-            "- importance: float 0.0-1.0 — how important this fact is for "
-            "understanding the user long-term. Relationships and core identity "
-            "(0.7-0.9), preferences and opinions (0.5-0.7), transient actions "
-            "and observations (0.2-0.4).\n"
-            "- Focus on: personal details, preferences, relationships, events, "
-            "emotions, plans, and opinions.\n"
-            "- Pay careful attention to WHO does WHAT to WHOM. Preserve the direction "
-            "of the relationship exactly as stated.\n"
-            f"{companion_rule}"
-            "- CRITICAL: ONLY extract facts that the USER revealed about THEMSELVES. "
-            "The assistant response is provided for context only — NEVER extract facts "
-            "from it. If the assistant says 'I love hiking' or 'I think you should...', "
-            "those are the assistant's words, NOT user facts. "
-            "If a fact's subject would be 'Assistant' or the assistant's name, skip it.\n"
-            "- Do NOT include greetings, filler, or questions.\n\n"
+            f"- subject: 'User' for user facts, '{name}' for companion self-facts.\n"
+            "- predicate: the verb phrase.\n"
+            "- object: the target of the action.\n"
+            "- text: a short third-person declarative sentence.\n"
+            "- importance: float 0.0-1.0. Relationships and core identity "
+            "(0.7-0.9), preferences and opinions (0.5-0.7), transient "
+            "observations (0.2-0.4).\n"
+            "- Pay careful attention to WHO says WHAT. Preserve the direction "
+            "of the relationship exactly as stated.\n\n"
+            "## User facts\n"
+            "Extract personal details, preferences, relationships, events, "
+            "emotions, plans, and opinions the USER reveals about themselves.\n\n"
+            f"## {name}'s self-facts\n"
+            f"Extract identity, preferences, personal history, skills, "
+            f"abilities, and actions that reveal {name}'s traits or state. "
+            f"This includes roleplay actions in asterisks "
+            f"(e.g. '*I test my strength*' → '{name} tested their strength'). "
+            f"Render ALL companion facts in third person: "
+            f"'I love cooking' → '{name} loves cooking'.\n"
+            f"Do NOT extract from {name}:\n"
+            "- Conversational responses ('I understand', 'That sounds nice')\n"
+            "- Questions or suggestions directed at the user\n"
+            "- Meta-statements ('I'm here for you', 'I want to help')\n"
+            "- Empathy expressions ('I can see why you feel that way')\n\n"
             "## Entity rules\n"
-            "- Each entity must have: name (canonical form), relationship (to the user: "
-            "'sister', 'boss', 'friend', 'pet', 'coworker', etc. — empty string if "
-            "unknown), aliases (nicknames or alternate names, empty array if none).\n"
-            "- Only extract entities that are people, pets, or organizations — not "
-            "abstract concepts or places.\n\n"
+            "- Each entity must have: name (canonical form), relationship (to "
+            "the user: 'sister', 'boss', 'friend', 'pet', etc. — empty string "
+            "if unknown), aliases (nicknames, empty array if none).\n"
+            "- Only extract people, pets, or organizations.\n\n"
             "## Output format\n"
-            "Return strict JSON: a single object with keys 'facts' and 'entities'.\n\n"
-            "Example:\n"
-            '  User says "My sister Sarah, we call her sis, started a new job."\n'
-            "  {\n"
+            "Return strict JSON with keys 'facts' and 'entities'.\n\n"
+            "Example 1:\n"
+            '  User: "My sister Sarah started a new job."\n'
+            f'  {name}: "That\'s wonderful! I used to work in HR myself."\n'
+            "  {{\n"
             '    "facts": [\n'
-            '      {"subject": "User", "predicate": "has sister who started", '
-            '"object": "a new job", "text": "User\'s sister Sarah started a new job", '
-            '"importance": 0.7}\n'
+            '      {{"subject": "User", "predicate": "has sister who started",'
+            ' "object": "a new job",'
+            ' "text": "User\'s sister Sarah started a new job",'
+            ' "importance": 0.7}},\n'
+            f'      {{"subject": "{name}", "predicate": "used to work in",'
+            ' "object": "HR",'
+            f' "text": "{name} used to work in HR",'
+            ' "importance": 0.5}}\n'
             "    ],\n"
             '    "entities": [\n'
-            '      {"name": "Sarah", "relationship": "sister", "aliases": ["sis"]}\n'
+            '      {{"name": "Sarah", "relationship": "sister",'
+            ' "aliases": []}}\n'
             "    ]\n"
-            "  }\n\n"
+            "  }}\n\n"
+            "Example 2 (roleplay actions):\n"
+            '  User: "Can you try lifting that boulder?"\n'
+            f'  {name}: "*I test out my newfound strength by easily '
+            'lifting the heavy boulder* I had no idea I was this strong!"\n'
+            "  {{\n"
+            '    "facts": [\n'
+            f'      {{"subject": "{name}", "predicate": "has",'
+            ' "object": "newfound strength",'
+            f' "text": "{name} has newfound strength and can easily lift '
+            'heavy objects",'
+            ' "importance": 0.6}}\n'
+            "    ],\n"
+            '    "entities": []\n'
+            "  }}\n\n"
             f"User message: {user_message}\n"
-            f"Assistant response: {assistant_message}"
+            f"{name}'s response: {assistant_message}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Companion self-fact extraction
-# ---------------------------------------------------------------------------
-
-_COMPANION_SELF_FACT = re.compile(
-    r"\b("
-    r"i\s+am|i'm|i\s+was|"
-    r"i\s+have|i've|i\s+had|"
-    r"i\s+love|i\s+like|i\s+enjoy|i\s+prefer|i\s+adore|"
-    r"i\s+grew\s+up|i\s+used\s+to|i\s+remember\s+when|"
-    r"i\s+know\s+(?:a\s+lot|how|about)|i\s+learned|i\s+studied|"
-    r"i\s+live|i\s+lived|i\s+come\s+from|i\s+came\s+from|"
-    r"my\s+favorite|my\s+name|my\s+hobby|my\s+passion"
-    r")\b",
-    re.IGNORECASE,
-)
-
-_COMPANION_FILLER = re.compile(
-    r"\b("
-    r"i\s+think\s+you|i\s+hope\s+you|i\s+can\s+see|"
-    r"i\s+understand|i'm\s+glad|i'm\s+sorry|i'm\s+here|"
-    r"i\s+want\s+to\s+help|i\s+believe\s+in\s+you|"
-    r"i'm\s+happy\s+to|i'd\s+love\s+to\s+hear|"
-    r"i\s+appreciate|i\s+noticed|i\s+can\s+tell|"
-    r"i\s+feel\s+like\s+you|i\s+bet\s+you|"
-    r"i'd\s+suggest|i\s+would\s+say|i\s+wonder\s+if"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def _companion_to_third_person(sentence: str, name: str) -> str:
-    """Convert a first-person companion sentence to third-person."""
-    text = sentence.strip().rstrip(".")
-    text = re.sub(r"\bI'm\b", f"{name} is", text)
-    text = re.sub(r"\bI've\b", f"{name} has", text)
-    text = re.sub(r"\bI\b", name, text)
-    text = re.sub(r"\b[Mm]y\b", f"{name}'s", text)
-    text = re.sub(r"\bme\b", name, text)
-    text = re.sub(r"\bmyself\b", name, text)
-    text = re.sub(r"\bmine\b", f"{name}'s", text)
-    if text:
-        text = text[0].upper() + text[1:]
-    return text
-
-
-def extract_companion_facts(
-    assistant_message: str,
-    companion_name: str | None = None,
-) -> list[ExtractedFact]:
-    """Extract self-referential facts from the companion's response.
-
-    Looks for first-person identity, preference, and history statements.
-    Skips conversational fillers and user-directed sentences.
-    """
-    name = companion_name or "Companion"
-    facts: list[ExtractedFact] = []
-    seen: set[str] = set()
-
-    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(assistant_message) if s.strip()]
-    for sentence in sentences:
-        if len(sentence.split()) < 4:
-            continue
-        lowered = sentence.lower()
-        # Skip sentences about the user
-        if re.search(r"\byou(?:r|rs|rself)?\b", lowered):
-            continue
-        # Skip conversational fillers
-        if _COMPANION_FILLER.search(lowered):
-            continue
-        # Must have a self-referential pattern
-        if not _COMPANION_SELF_FACT.search(lowered):
-            continue
-        text = _companion_to_third_person(sentence, name)
-        if text and text not in seen:
-            seen.add(text)
-            facts.append(
-                ExtractedFact(
-                    subject=name,
-                    predicate="",
-                    object="",
-                    text=text,
-                    importance=0.6,
-                )
-            )
-    return facts
 
 
 _HIGH_IMPORTANCE_PATTERNS = re.compile(

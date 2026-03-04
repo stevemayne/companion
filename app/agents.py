@@ -10,7 +10,7 @@ from threading import Lock
 from typing import Protocol
 from uuid import UUID
 
-from app.analysis import ExtractionOutcome, extract_companion_facts
+from app.analysis import ExtractionOutcome
 from app.consolidation import ConsolidationAgent
 from app.debug_trace import DebugTraceStore, build_trace_base
 from app.schemas import (
@@ -199,11 +199,7 @@ class BackgroundAgentDispatcher:
                         )
                     )
 
-            # Extract companion self-facts from the assistant response
-            companion_facts = extract_companion_facts(
-                assistant_message, companion_name,
-            )
-            for fact in companion_facts:
+            for fact in outcome.companion_facts:
                 self._vector_store.upsert_memory(
                     MemoryItem(
                         chat_session_id=chat_session_id,
@@ -233,7 +229,7 @@ class BackgroundAgentDispatcher:
                     {"name": e.name, "relationship": e.relationship, "aliases": e.aliases}
                     for e in outcome.entities
                 ],
-                "companion_facts": [f.text for f in companion_facts],
+                "companion_facts": [f.text for f in outcome.companion_facts],
             })
             self._debug_store.add_trace(chat_session_id=chat_session_id, trace=trace)
 

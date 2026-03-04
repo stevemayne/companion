@@ -209,7 +209,8 @@ def test_llm_extractor_handles_legacy_string_format() -> None:
     assert outcome.entities == []
 
 
-def test_llm_extractor_filters_companion_subject() -> None:
+def test_llm_extractor_routes_companion_subject() -> None:
+    """Companion-subject facts go to companion_facts, not facts."""
     extractor = LLMFactExtractor(
         provider=_JsonProvider(
             '[{"subject": "Ari", "predicate": "comforted", "object": "User", '
@@ -228,6 +229,9 @@ def test_llm_extractor_filters_companion_subject() -> None:
     assert len(outcome.facts) == 1
     assert outcome.facts[0].subject == "User"
     assert outcome.facts[0].text == "User felt better after talking to Ari"
+    assert len(outcome.companion_facts) == 1
+    assert outcome.companion_facts[0].subject == "Ari"
+    assert outcome.companion_facts[0].text == "Ari comforted User"
 
 
 def test_llm_extractor_preserves_subject_object_direction() -> None:
