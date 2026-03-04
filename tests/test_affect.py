@@ -404,11 +404,12 @@ def test_strip_leaked_state_preserves_clean_response() -> None:
     assert result == text
 
 
-def test_strip_leaked_state_wont_gut_response() -> None:
+def test_strip_leaked_state_returns_empty_when_entirely_leaked() -> None:
     text = "[Emotional state: happy 8/10]"
     result = _strip_leaked_state(text)
-    # Should return original since stripping would leave nothing
-    assert result == text
+    # If the entire response was leaked state, return empty so the
+    # caller can detect and retry rather than echoing the leak.
+    assert result == ""
 
 
 # ---------------------------------------------------------------------------

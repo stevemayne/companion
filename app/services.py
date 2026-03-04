@@ -445,9 +445,9 @@ def _strip_leaked_state(text: str) -> str:
         cleaned = pattern.sub("", cleaned)
     # Collapse any resulting double-blank-lines or trailing whitespace
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    # Keep the cleaned version as long as some real content remains
-    if not cleaned or len(cleaned) < 10:
-        return text
+    # If stripping removed everything, the entire response was leaked
+    # state — return empty string so the caller can detect and handle it
+    # rather than echoing the leak back to the user.
     return cleaned
 
 
@@ -731,6 +731,20 @@ class CognitiveOrchestrator:
         response = _strip_leaked_state(response)
         response = _strip_sycophantic_closer(response)
 
+        # If the entire response was leaked internal state, retry once
+        # with only the last user message to get a clean response.
+        if not response:
+            logger.warning("Response was entirely leaked state, retrying")
+            response = self.model_provider.generate(
+                chat_session_id=message.chat_session_id,
+                messages=[
+                    messages[0],  # system prompt
+                    {"role": "user", "content": message.content},
+                ],
+            )
+            response = _strip_leaked_state(response)
+            response = _strip_sycophantic_closer(response)
+
         assistant_message = Message(
             chat_session_id=message.chat_session_id,
             message_id=uuid4(),
@@ -879,19 +893,14 @@ class CognitiveOrchestrator:
             if window[i].role == "assistant":
                 assistant_count_from_end += 1
                 if assistant_count_from_end > VERBATIM_TURNS:
-                    # Replace older assistant messages with a brief summary
-                    truncated = window[i].content[:80].rstrip()
-                    if len(window[i].content) > 80:
-                        truncated += "…"
-                    window[i] = Message(
-                        chat_session_id=window[i].chat_session_id,
-                        message_id=window[i].message_id,
-                        role="assistant",
-                        content=f"[Earlier response: {truncated}]",
-                        created_at=window[i].created_at,
-                    )
+                    # Drop older assistant messages to prevent context
+                    # pollution.  Keeping user messages maintains
+                    # conversational continuity without risking the
+                    # model echoing a truncation format.
+                    window[i] = None  # type: ignore[assignment]
         for msg in window:
-            messages.append({"role": msg.role, "content": msg.content})
+            if msg is not None:
+                messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": user_message.content})
         return messages
