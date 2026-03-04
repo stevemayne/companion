@@ -333,6 +333,47 @@ class InMemorySeedContextStore:
         return contexts[:limit]
 
 
+def _rerank_memories(
+    items: list[MemoryItem],
+    *,
+    entities: list[str],
+    limit: int = 5,
+) -> list[MemoryItem]:
+    """Rerank retrieved memories using entity overlap and access frequency.
+
+    Memories mentioning a detected entity get a 1.5x boost.  Memories that
+    have been accessed more often get a small additional boost (up to 1.2x
+    for 10+ accesses).  The ``score`` field on each returned item is updated
+    to reflect the reranked value.
+    """
+    if not items:
+        return []
+
+    lowered_entities = [e.lower() for e in entities]
+
+    scored: list[tuple[float, MemoryItem]] = []
+    for item in items:
+        base = item.score if item.score is not None else 0.0
+
+        # Entity boost: 1.5x if any detected entity appears in the content
+        content_lower = item.content.lower()
+        entity_boost = 1.0
+        for ent in lowered_entities:
+            if ent in content_lower:
+                entity_boost = 1.5
+                break
+
+        # Access boost: up to 1.2x for frequently accessed memories
+        access_boost = 1.0 + min(item.access_count, 10) * 0.02
+
+        reranked = base * entity_boost * access_boost
+        updated = item.model_copy(update={"score": reranked})
+        scored.append((reranked, updated))
+
+    scored.sort(key=lambda c: c[0], reverse=True)
+    return [item for _, item in scored[:limit]]
+
+
 def _deduplicate_memories(
     items: list[MemoryItem],
     *,
@@ -699,9 +740,14 @@ class CognitiveOrchestrator:
 
         if retrieval_decision.should_retrieve:
             query = retrieval_decision.rewritten_query or message.content
-            semantic_context = self.vector_store.query_similar(
+            raw_candidates = self.vector_store.query_similar(
                 chat_session_id=message.chat_session_id,
                 query=query,
+                limit=15,
+            )
+            semantic_context = _rerank_memories(
+                raw_candidates,
+                entities=preprocess.entities,
                 limit=5,
             )
             for mem in semantic_context:
@@ -711,6 +757,7 @@ class CognitiveOrchestrator:
                 entities=preprocess.entities,
             )
         else:
+            raw_candidates = []
             semantic_context = []
             graph_context = []
         messages = self._assemble_messages(
@@ -767,6 +814,7 @@ class CognitiveOrchestrator:
                     "reason": retrieval_decision.reason,
                     "latency_ms": round(retrieval_decision.latency_ms, 2),
                 },
+                "candidates_fetched": len(raw_candidates),
                 "semantic_items": [item.content for item in semantic_context],
                 "graph_relations": [
                     f"{rel.source}-{rel.relation}->{rel.target}" for rel in graph_context

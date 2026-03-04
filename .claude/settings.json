@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run ruff check --fix app/services.py tests/test_retrieval.py)"
+      "Bash(uv run ruff check --fix app/services.py tests/test_retrieval.py)",
+      "WebFetch(domain:aclanthology.org)",
+      "Read(//tmp/**)",
+      "Bash(python3 -c \":*)"
     ]
   }
 }

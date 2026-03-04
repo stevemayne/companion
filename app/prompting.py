@@ -12,7 +12,6 @@ _RESPONSE_RULES = (
     "Never simulate the user's replies or continue the conversation on their behalf. "
     "Never write dialogue lines for the user. "
     "Do not generate multiple back-and-forth exchanges in a single message.\n"
-    # "- Keep responses concise - a short paragraph is good.\n"
     "- Keep responses concise — typically 1-3 short paragraphs.\n"
     "- Never fabricate specific details about the user - their job, hobbies, "
     "past experiences, or current activities - unless they have explicitly "

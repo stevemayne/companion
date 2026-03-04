@@ -141,6 +141,7 @@ export function App() {
   const [knowledgeAffect, setKnowledgeAffect] = useState<CompanionAffect | null>(null);
 
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const currentSessionRef = useRef(sessionId);
 
@@ -153,11 +154,7 @@ export function App() {
   }, [seedDraft]);
 
   useEffect(() => {
-    const pane = messagesPaneRef.current;
-    if (!pane) {
-      return;
-    }
-    pane.scrollTop = pane.scrollHeight;
+    messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
   }, [messages, pendingAssistant, isStreaming]);
 
   const streamDisabled = useMemo(
@@ -599,6 +596,7 @@ export function App() {
               <div>{pendingAssistant || "..."}</div>
             </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         <form className="composer" onSubmit={onSubmit}>
