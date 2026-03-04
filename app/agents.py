@@ -10,7 +10,7 @@ from threading import Lock
 from typing import Protocol
 from uuid import UUID
 
-from app.analysis import ExtractionOutcome
+from app.analysis import ExtractionOutcome, extract_companion_facts
 from app.consolidation import ConsolidationAgent
 from app.debug_trace import DebugTraceStore, build_trace_base
 from app.schemas import (
@@ -199,6 +199,20 @@ class BackgroundAgentDispatcher:
                         )
                     )
 
+            # Extract companion self-facts from the assistant response
+            companion_facts = extract_companion_facts(
+                assistant_message, companion_name,
+            )
+            for fact in companion_facts:
+                self._vector_store.upsert_memory(
+                    MemoryItem(
+                        chat_session_id=chat_session_id,
+                        kind=MemoryKind.COMPANION,
+                        content=fact.text,
+                        importance=fact.importance,
+                    )
+                )
+
             trace = build_trace_base(chat_session_id=chat_session_id)
             trace.update({
                 "agent": "extraction",
@@ -219,6 +233,7 @@ class BackgroundAgentDispatcher:
                     {"name": e.name, "relationship": e.relationship, "aliases": e.aliases}
                     for e in outcome.entities
                 ],
+                "companion_facts": [f.text for f in companion_facts],
             })
             self._debug_store.add_trace(chat_session_id=chat_session_id, trace=trace)
 
@@ -280,9 +295,12 @@ class BackgroundAgentDispatcher:
                 chat_session_id=chat_session_id,
                 limit=self._consolidation_message_window,
             )
-            existing = self._vector_store.list_memories(
-                chat_session_id=chat_session_id,
-            )
+            existing = [
+                m for m in self._vector_store.list_memories(
+                    chat_session_id=chat_session_id,
+                )
+                if m.kind != MemoryKind.COMPANION
+            ]
             result = self._consolidation_agent.consolidate_session(
                 chat_session_id=chat_session_id,
                 messages=messages,

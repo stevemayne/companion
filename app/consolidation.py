@@ -141,8 +141,13 @@ Return the memory_id and a new importance (current + 0.05 to 0.15, max 1.0).
 Return the memory_id, a reason, and optional replacement_text.
 - **ignore**: No relevant mention. Omit from output.
 
-Also extract any NEW durable facts about the user that are not already \
+Also extract any NEW durable facts about the USER that are not already \
 captured in existing memories. Each new fact needs text and importance (0.0-1.0).
+
+CRITICAL: Only extract facts about the USER based on what they said. \
+NEVER extract facts about the assistant/companion — their opinions, \
+feelings, preferences, or actions are NOT user facts. If the assistant \
+said "I love hiking", that is NOT a fact about the user.
 
 ## Output format
 Return strict JSON:
@@ -178,7 +183,8 @@ def _build_consolidation_prompt(
 
     conv_lines: list[str] = []
     for msg in messages:
-        conv_lines.append(f"{msg.role.upper()}: {msg.content}")
+        if msg.role == "user":
+            conv_lines.append(f"USER: {msg.content}")
     conversation_block = "\n".join(conv_lines) if conv_lines else "(none)"
 
     return _CONSOLIDATION_PROMPT.format(

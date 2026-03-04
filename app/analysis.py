@@ -15,51 +15,278 @@ from app.schemas import PreprocessResult
 
 ENTITY_STOPWORDS = {
     # Question words
-    "who", "what", "when", "where", "why", "how", "which", "whom", "whose",
+    "who",
+    "what",
+    "when",
+    "where",
+    "why",
+    "how",
+    "which",
+    "whom",
+    "whose",
     # Pronouns
-    "i", "me", "my", "mine", "myself", "you", "your", "yours", "yourself",
-    "he", "him", "his", "himself", "she", "her", "hers", "herself",
-    "it", "its", "itself", "we", "us", "our", "ours", "ourselves",
-    "they", "them", "their", "theirs", "themselves",
-    "this", "that", "these", "those",
+    "i",
+    "me",
+    "my",
+    "mine",
+    "myself",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "he",
+    "him",
+    "his",
+    "himself",
+    "she",
+    "her",
+    "hers",
+    "herself",
+    "it",
+    "its",
+    "itself",
+    "we",
+    "us",
+    "our",
+    "ours",
+    "ourselves",
+    "they",
+    "them",
+    "their",
+    "theirs",
+    "themselves",
+    "this",
+    "that",
+    "these",
+    "those",
     # Determiners / articles
-    "the", "a", "an", "some", "any", "all", "each", "every", "no", "other",
+    "the",
+    "a",
+    "an",
+    "some",
+    "any",
+    "all",
+    "each",
+    "every",
+    "no",
+    "other",
     # Common verbs / auxiliaries
-    "is", "am", "are", "was", "were", "be", "been", "being",
-    "do", "did", "does", "done", "doing",
-    "has", "have", "had", "having",
-    "can", "could", "will", "would", "shall", "should", "may", "might", "must",
-    "go", "went", "gone", "get", "got", "let", "make", "made", "take", "took",
-    "come", "came", "see", "saw", "know", "knew", "think", "thought",
-    "tell", "told", "said", "say", "give", "gave", "want", "need", "like",
-    "just", "also", "still", "keep", "kept",
+    "is",
+    "am",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "do",
+    "did",
+    "does",
+    "done",
+    "doing",
+    "has",
+    "have",
+    "had",
+    "having",
+    "can",
+    "could",
+    "will",
+    "would",
+    "shall",
+    "should",
+    "may",
+    "might",
+    "must",
+    "go",
+    "went",
+    "gone",
+    "get",
+    "got",
+    "let",
+    "make",
+    "made",
+    "take",
+    "took",
+    "come",
+    "came",
+    "see",
+    "saw",
+    "know",
+    "knew",
+    "think",
+    "thought",
+    "tell",
+    "told",
+    "said",
+    "say",
+    "give",
+    "gave",
+    "want",
+    "need",
+    "like",
+    "just",
+    "also",
+    "still",
+    "keep",
+    "kept",
     # Common adjectives / adverbs
-    "good", "great", "nice", "bad", "well", "very", "really", "sure",
-    "much", "more", "most", "many", "few", "new", "old", "big", "little",
-    "long", "short", "first", "last", "next", "same", "different",
-    "right", "wrong", "only", "even", "already", "never", "always",
+    "good",
+    "great",
+    "nice",
+    "bad",
+    "well",
+    "very",
+    "really",
+    "sure",
+    "much",
+    "more",
+    "most",
+    "many",
+    "few",
+    "new",
+    "old",
+    "big",
+    "little",
+    "long",
+    "short",
+    "first",
+    "last",
+    "next",
+    "same",
+    "different",
+    "right",
+    "wrong",
+    "only",
+    "even",
+    "already",
+    "never",
+    "always",
     # Conjunctions / prepositions
-    "and", "but", "or", "so", "yet", "for", "nor",
-    "about", "after", "before", "from", "into", "with", "without",
-    "over", "under", "between", "through", "during", "since", "until",
+    "and",
+    "but",
+    "or",
+    "so",
+    "yet",
+    "for",
+    "nor",
+    "about",
+    "after",
+    "before",
+    "from",
+    "into",
+    "with",
+    "without",
+    "over",
+    "under",
+    "between",
+    "through",
+    "during",
+    "since",
+    "until",
     # Greetings / interjections
-    "hello", "hi", "hey", "thanks", "thank", "yes", "oh", "okay",
-    "sorry", "please", "wow", "yeah", "nah",
+    "hello",
+    "hi",
+    "hey",
+    "thanks",
+    "thank",
+    "yes",
+    "oh",
+    "okay",
+    "sorry",
+    "please",
+    "wow",
+    "yeah",
+    "nah",
     # Other common sentence starters
-    "here", "there", "now", "then", "today", "tomorrow", "yesterday",
-    "maybe", "perhaps", "actually", "basically", "honestly",
-    "not", "don", "doesn", "didn", "won", "wouldn", "couldn",
-    "shouldn", "isn", "aren", "wasn", "weren", "hasn", "haven", "hadn",
+    "here",
+    "there",
+    "now",
+    "then",
+    "today",
+    "tomorrow",
+    "yesterday",
+    "maybe",
+    "perhaps",
+    "actually",
+    "basically",
+    "honestly",
+    "not",
+    "don",
+    "doesn",
+    "didn",
+    "won",
+    "wouldn",
+    "couldn",
+    "shouldn",
+    "isn",
+    "aren",
+    "wasn",
+    "weren",
+    "hasn",
+    "haven",
+    "hadn",
     # Contractions (with straight and curly apostrophes)
-    "i'm", "i've", "i'd", "i'll", "it's", "he's", "she's", "we're", "we've",
-    "we'd", "we'll", "they're", "they've", "they'd", "they'll", "you're",
-    "you've", "you'd", "you'll", "that's", "there's", "here's", "what's",
-    "who's", "let's", "don't", "doesn't", "didn't", "won't", "wouldn't",
-    "can't", "couldn't", "shouldn't", "isn't", "aren't", "wasn't", "weren't",
-    "i\u2019m", "i\u2019ve", "i\u2019d", "i\u2019ll", "it\u2019s", "he\u2019s", "she\u2019s",
-    "we\u2019re", "we\u2019ve", "they\u2019re", "they\u2019ve", "you\u2019re", "you\u2019ve",
-    "that\u2019s", "there\u2019s", "here\u2019s", "don\u2019t", "doesn\u2019t", "didn\u2019t",
-    "won\u2019t", "wouldn\u2019t", "can\u2019t", "couldn\u2019t", "shouldn\u2019t",
+    "i'm",
+    "i've",
+    "i'd",
+    "i'll",
+    "it's",
+    "he's",
+    "she's",
+    "we're",
+    "we've",
+    "we'd",
+    "we'll",
+    "they're",
+    "they've",
+    "they'd",
+    "they'll",
+    "you're",
+    "you've",
+    "you'd",
+    "you'll",
+    "that's",
+    "there's",
+    "here's",
+    "what's",
+    "who's",
+    "let's",
+    "don't",
+    "doesn't",
+    "didn't",
+    "won't",
+    "wouldn't",
+    "can't",
+    "couldn't",
+    "shouldn't",
+    "isn't",
+    "aren't",
+    "wasn't",
+    "weren't",
+    "i\u2019m",
+    "i\u2019ve",
+    "i\u2019d",
+    "i\u2019ll",
+    "it\u2019s",
+    "he\u2019s",
+    "she\u2019s",
+    "we\u2019re",
+    "we\u2019ve",
+    "they\u2019re",
+    "they\u2019ve",
+    "you\u2019re",
+    "you\u2019ve",
+    "that\u2019s",
+    "there\u2019s",
+    "here\u2019s",
+    "don\u2019t",
+    "doesn\u2019t",
+    "didn\u2019t",
+    "won\u2019t",
+    "wouldn\u2019t",
+    "can\u2019t",
+    "couldn\u2019t",
+    "shouldn\u2019t",
 }
 
 ALLOWED_INTENTS = {"question", "status_update", "statement"}
@@ -116,7 +343,8 @@ class _LLMAnalysisPayload(BaseModel):
             entity = re.sub(
                 r"^[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+"
                 r"|[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+$",
-                "", token,
+                "",
+                token,
             )
             if not entity:
                 continue
@@ -156,7 +384,8 @@ class HeuristicIntentAnalyzer:
             cleaned = re.sub(
                 r"^[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+"
                 r"|[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+$",
-                "", token,
+                "",
+                token,
             )
             if not cleaned or len(cleaned) <= 1 or not cleaned[:1].isupper():
                 continue
@@ -296,18 +525,30 @@ class ExtractionOutcome:
 
 
 _ASSISTANT_SUBJECTS = {
-    "assistant", "the assistant", "ai", "the ai",
-    "companion", "the companion",
+    "assistant",
+    "the assistant",
+    "ai",
+    "the ai",
+    "companion",
+    "the companion",
 }
 
 
 def validate_facts(
     facts: list[ExtractedFact],
     companion_name: str | None = None,
+    assistant_message: str | None = None,
 ) -> list[ExtractedFact]:
     valid: list[ExtractedFact] = []
     companion_lower = companion_name.strip().lower() if companion_name else None
     seen_texts: set[str] = set()
+
+    # Build a token set from the assistant message to detect facts that
+    # were likely extracted from the assistant's words, not the user's.
+    assistant_tokens: set[str] = set()
+    if assistant_message:
+        assistant_tokens = {t.lower() for t in assistant_message.split() if len(t) > 2}
+
     for fact in facts:
         if not fact.subject.strip() or not fact.text.strip():
             continue
@@ -325,6 +566,14 @@ def validate_facts(
             (f"the {companion_lower} ", f"{companion_lower} ")
         ):
             continue
+        # Reject facts whose content words overlap heavily with the
+        # assistant message — likely extracted from assistant speech.
+        if assistant_tokens:
+            fact_tokens = {t.lower() for t in fact.text.split() if len(t) > 2}
+            if fact_tokens:
+                overlap = len(fact_tokens & assistant_tokens) / len(fact_tokens)
+                if overlap > 0.7:
+                    continue
         if fact.text in seen_texts:
             continue
         seen_texts.add(fact.text)
@@ -367,10 +616,15 @@ class HeuristicFactExtractor:
                 if text and text not in seen_texts:
                     seen_texts.add(text)
                     importance = _heuristic_importance(sentence)
-                    facts.append(ExtractedFact(
-                        subject="User", predicate="", object="", text=text,
-                        importance=importance,
-                    ))
+                    facts.append(
+                        ExtractedFact(
+                            subject="User",
+                            predicate="",
+                            object="",
+                            text=text,
+                            importance=importance,
+                        )
+                    )
         facts = validate_facts(facts, companion_name)
         return ExtractionOutcome(
             facts=facts,
@@ -402,13 +656,19 @@ class LLMFactExtractor:
                     {
                         "role": "user",
                         "content": self._extraction_prompt(
-                            user_message, assistant_message, companion_name,
+                            user_message,
+                            assistant_message,
+                            companion_name,
                         ),
                     },
                 ],
             )
             facts, entities = _parse_extraction_payload(raw)
-            facts = validate_facts(facts, companion_name)
+            facts = validate_facts(
+                facts,
+                companion_name,
+                assistant_message=assistant_message,
+            )
             return ExtractionOutcome(
                 facts=facts,
                 requested_provider="llm",
@@ -465,9 +725,11 @@ class LLMFactExtractor:
             "- Pay careful attention to WHO does WHAT to WHOM. Preserve the direction "
             "of the relationship exactly as stated.\n"
             f"{companion_rule}"
-            "- NEVER extract facts about the assistant, what the assistant said, "
-            "felt, imagined, or did. Only extract facts about the USER. "
-            "If a fact's subject would be 'Assistant' or 'The Assistant', skip it.\n"
+            "- CRITICAL: ONLY extract facts that the USER revealed about THEMSELVES. "
+            "The assistant response is provided for context only — NEVER extract facts "
+            "from it. If the assistant says 'I love hiking' or 'I think you should...', "
+            "those are the assistant's words, NOT user facts. "
+            "If a fact's subject would be 'Assistant' or the assistant's name, skip it.\n"
             "- Do NOT include greetings, filler, or questions.\n\n"
             "## Entity rules\n"
             "- Each entity must have: name (canonical form), relationship (to the user: "
@@ -492,6 +754,94 @@ class LLMFactExtractor:
             f"User message: {user_message}\n"
             f"Assistant response: {assistant_message}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Companion self-fact extraction
+# ---------------------------------------------------------------------------
+
+_COMPANION_SELF_FACT = re.compile(
+    r"\b("
+    r"i\s+am|i'm|i\s+was|"
+    r"i\s+have|i've|i\s+had|"
+    r"i\s+love|i\s+like|i\s+enjoy|i\s+prefer|i\s+adore|"
+    r"i\s+grew\s+up|i\s+used\s+to|i\s+remember\s+when|"
+    r"i\s+know\s+(?:a\s+lot|how|about)|i\s+learned|i\s+studied|"
+    r"i\s+live|i\s+lived|i\s+come\s+from|i\s+came\s+from|"
+    r"my\s+favorite|my\s+name|my\s+hobby|my\s+passion"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_COMPANION_FILLER = re.compile(
+    r"\b("
+    r"i\s+think\s+you|i\s+hope\s+you|i\s+can\s+see|"
+    r"i\s+understand|i'm\s+glad|i'm\s+sorry|i'm\s+here|"
+    r"i\s+want\s+to\s+help|i\s+believe\s+in\s+you|"
+    r"i'm\s+happy\s+to|i'd\s+love\s+to\s+hear|"
+    r"i\s+appreciate|i\s+noticed|i\s+can\s+tell|"
+    r"i\s+feel\s+like\s+you|i\s+bet\s+you|"
+    r"i'd\s+suggest|i\s+would\s+say|i\s+wonder\s+if"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _companion_to_third_person(sentence: str, name: str) -> str:
+    """Convert a first-person companion sentence to third-person."""
+    text = sentence.strip().rstrip(".")
+    text = re.sub(r"\bI'm\b", f"{name} is", text)
+    text = re.sub(r"\bI've\b", f"{name} has", text)
+    text = re.sub(r"\bI\b", name, text)
+    text = re.sub(r"\b[Mm]y\b", f"{name}'s", text)
+    text = re.sub(r"\bme\b", name, text)
+    text = re.sub(r"\bmyself\b", name, text)
+    text = re.sub(r"\bmine\b", f"{name}'s", text)
+    if text:
+        text = text[0].upper() + text[1:]
+    return text
+
+
+def extract_companion_facts(
+    assistant_message: str,
+    companion_name: str | None = None,
+) -> list[ExtractedFact]:
+    """Extract self-referential facts from the companion's response.
+
+    Looks for first-person identity, preference, and history statements.
+    Skips conversational fillers and user-directed sentences.
+    """
+    name = companion_name or "Companion"
+    facts: list[ExtractedFact] = []
+    seen: set[str] = set()
+
+    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(assistant_message) if s.strip()]
+    for sentence in sentences:
+        if len(sentence.split()) < 4:
+            continue
+        lowered = sentence.lower()
+        # Skip sentences about the user
+        if re.search(r"\byou(?:r|rs|rself)?\b", lowered):
+            continue
+        # Skip conversational fillers
+        if _COMPANION_FILLER.search(lowered):
+            continue
+        # Must have a self-referential pattern
+        if not _COMPANION_SELF_FACT.search(lowered):
+            continue
+        text = _companion_to_third_person(sentence, name)
+        if text and text not in seen:
+            seen.add(text)
+            facts.append(
+                ExtractedFact(
+                    subject=name,
+                    predicate="",
+                    object="",
+                    text=text,
+                    importance=0.6,
+                )
+            )
+    return facts
 
 
 _HIGH_IMPORTANCE_PATTERNS = re.compile(
@@ -604,10 +954,15 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                 importance = 0.5
             if text and subject and text not in seen_texts:
                 seen_texts.add(text)
-                facts.append(ExtractedFact(
-                    subject=subject, predicate=predicate,
-                    object=obj, text=text, importance=importance,
-                ))
+                facts.append(
+                    ExtractedFact(
+                        subject=subject,
+                        predicate=predicate,
+                        object=obj,
+                        text=text,
+                        importance=importance,
+                    )
+                )
         elif isinstance(item, str):
             cleaned = item.strip()
             if cleaned and cleaned not in seen_texts:

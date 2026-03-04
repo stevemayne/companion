@@ -22,6 +22,7 @@ class MemoryKind(StrEnum):
     EPISODIC = "episodic"
     SEMANTIC = "semantic"
     REFLECTIVE = "reflective"
+    COMPANION = "companion"
 
 
 class MemoryStatus(StrEnum):

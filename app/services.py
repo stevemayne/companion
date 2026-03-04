@@ -43,6 +43,7 @@ from app.schemas import (
     CompanionAffect,
     GraphRelation,
     MemoryItem,
+    MemoryKind,
     MemoryStatus,
     Message,
     MonologueState,
@@ -492,6 +493,22 @@ def _strip_leaked_state(text: str) -> str:
     return cleaned
 
 
+_TRAILING_ARTIFACTS = re.compile(
+    r"(?:\s*---+\s*)+$"           # trailing horizontal rules (--- or ---)
+    r"|(?:\s*\*\*\*+\s*)+$"       # trailing *** separators
+    r"|(?:\s*___+\s*)+$"          # trailing ___ separators
+    r"|(?:\n\s*Assistant:\s*)+$"  # trailing "Assistant:" role leak
+    r"|(?:\n\s*User:\s*)+$",     # trailing "User:" role leak
+    re.IGNORECASE,
+)
+
+
+def _strip_trailing_artifacts(text: str) -> str:
+    """Remove trailing markdown separators and role-label leaks."""
+    cleaned = _TRAILING_ARTIFACTS.sub("", text).rstrip()
+    return cleaned if cleaned else text
+
+
 _HOSTILITY_TERMS = {"hate", "shut up", "stupid", "annoying", "useless", "idiot"}
 _WARMTH_TERMS = {"love", "trust", "appreciate", "grateful", "thank", "missed you", "care"}
 _WITHDRAWAL_TERMS = {"leave me alone", "don't want to talk", "go away", "whatever"}
@@ -746,7 +763,7 @@ class CognitiveOrchestrator:
                 limit=15,
             )
             semantic_context = _rerank_memories(
-                raw_candidates,
+                [m for m in raw_candidates if m.kind != MemoryKind.COMPANION],
                 entities=preprocess.entities,
                 limit=5,
             )
@@ -777,6 +794,7 @@ class CognitiveOrchestrator:
         )
         response = _strip_leaked_state(response)
         response = _strip_sycophantic_closer(response)
+        response = _strip_trailing_artifacts(response)
 
         # If the entire response was leaked internal state, retry once
         # with only the last user message to get a clean response.
@@ -791,6 +809,7 @@ class CognitiveOrchestrator:
             )
             response = _strip_leaked_state(response)
             response = _strip_sycophantic_closer(response)
+            response = _strip_trailing_artifacts(response)
 
         assistant_message = Message(
             chat_session_id=message.chat_session_id,
@@ -875,6 +894,12 @@ class CognitiveOrchestrator:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
         companion_system_prompt = build_companion_system_prompt(seed_context)
 
+        # Load companion self-facts for self-consistency
+        companion_facts = [
+            m for m in self.vector_store.list_memories(chat_session_id=chat_session_id)
+            if m.kind == MemoryKind.COMPANION and m.status == MemoryStatus.ACTIVE
+        ]
+
         history_text = " ".join(m.content for m in recent_messages[-20:])
         deduped_context = _deduplicate_memories(
             semantic_context, history_text=history_text,
@@ -908,6 +933,13 @@ class CognitiveOrchestrator:
         )
 
         system_content = companion_system_prompt
+        if companion_facts:
+            facts_list = "\n".join(f"- {m.content}" for m in companion_facts[-15:])
+            system_content += (
+                "\n\n## Your Established Self-Facts"
+                " (things you've said about yourself — stay consistent with these)\n"
+                + facts_list
+            )
         if context_parts:
             system_content += (
                 "\n\n## Session Context (internal — never include this in your response)\n"
