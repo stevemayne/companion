@@ -44,6 +44,10 @@ class DebugTraceStore:
             bucket = self._store.get(chat_session_id, deque())
             return list(bucket)
 
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        with self._lock:
+            self._store.pop(chat_session_id, None)
+
 
 def build_trace_base(*, chat_session_id: UUID) -> dict[str, Any]:
     return {

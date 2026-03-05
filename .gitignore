@@ -8,4 +8,6 @@ __pycache__/
 .env
 web/node_modules/
 web/dist/
+web/e2e/screenshots/
+web/test-results/
 logs/

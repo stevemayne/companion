@@ -385,6 +385,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "entries": entries,
         }
 
+    @app.delete(
+        "/v1/sessions/{chat_session_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={422: {"model": ApiErrorResponse}},
+    )
+    def delete_session(
+        chat_session_id: UUID,
+        request: Request,
+    ) -> Response:
+        container = get_container(request)
+        container.chat_service.delete_session(chat_session_id=chat_session_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.post(
         "/v1/sessions/{chat_session_id}/seed",
         response_model=SessionSeedContext,

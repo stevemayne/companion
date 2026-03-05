@@ -127,6 +127,10 @@ class InMemoryEpisodicStore:
             messages = list(self._messages.get(chat_session_id, []))
         return messages[-limit:]
 
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        with self._lock:
+            self._messages.pop(chat_session_id, None)
+
     def list_session_activity(self, *, limit: int = 50) -> list[SessionActivity]:
         with self._lock:
             buckets = list(self._messages.items())
@@ -168,6 +172,11 @@ class InMemoryVectorStore:
             vectors = self._vectors.setdefault(item.chat_session_id, [])
             items.append(item)
             vectors.append(vec)
+
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        with self._lock:
+            self._items.pop(chat_session_id, None)
+            self._vectors.pop(chat_session_id, None)
 
     def query_similar(
         self, *, chat_session_id: UUID, query: str, limit: int = 10
@@ -255,6 +264,10 @@ class InMemoryGraphStore:
         ]
         return related[:limit]
 
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        with self._lock:
+            self._relations.pop(chat_session_id, None)
+
     def list_relations(self, *, chat_session_id: UUID) -> list[GraphRelation]:
         with self._lock:
             return list(self._relations.get(chat_session_id, []))
@@ -273,6 +286,10 @@ class InMemoryMonologueStore:
         with self._lock:
             self._states[state.chat_session_id] = state
         return state
+
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        with self._lock:
+            self._states.pop(chat_session_id, None)
 
 
 class InMemorySeedContextStore:
@@ -325,6 +342,10 @@ class InMemorySeedContextStore:
     def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None:
         with self._lock:
             return self._seeds.get(chat_session_id)
+
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        with self._lock:
+            self._seeds.pop(chat_session_id, None)
 
     def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]:
         with self._lock:
@@ -617,27 +638,8 @@ class CognitiveOrchestrator:
             chat_session_id=message.chat_session_id,
             response=response,
         )
-        response = _strip_leaked_state(response)
-        response = _strip_sycophantic_closer(response)
-        response = _strip_trailing_artifacts(response)
-
-        # If the entire response was leaked internal state, retry once
-        # with only the last user message to get a clean response.
         if not response:
-            logger.warning("Response was entirely leaked state, retrying")
-            response = self.model_provider.generate(
-                chat_session_id=message.chat_session_id,
-                messages=[
-                    messages[0],  # system prompt
-                    {"role": "user", "content": message.content},
-                ],
-            )
-            response = _strip_leaked_state(response)
-            response = _strip_sycophantic_closer(response)
-            response = _strip_trailing_artifacts(response)
-
-        if not response:
-            logger.warning("Response still empty after retry, using fallback")
+            logger.warning("Empty response from model, using fallback")
             response = "*nods quietly*"
 
         assistant_message = Message(
@@ -1018,6 +1020,24 @@ class ChatService:
             reverse=True,
         )[:limit]
         return SessionListResponse(sessions=sessions)
+
+    def delete_session(self, *, chat_session_id: UUID) -> None:
+        for store in (
+            self.episodic_store,
+            self.vector_store,
+            self.graph_store,
+            self.monologue_store,
+            self.seed_store,
+        ):
+            if hasattr(store, "delete_session"):
+                store.delete_session(chat_session_id=chat_session_id)
+        self.debug_store.delete_session(chat_session_id=chat_session_id)
+        # Remove inference log file if it exists
+        from app.inference import LOGS_DIR
+
+        if LOGS_DIR is not None:
+            log_path = LOGS_DIR / f"{chat_session_id}.jsonl"
+            log_path.unlink(missing_ok=True)
 
     def _seed_version(self, chat_session_id: UUID) -> int | None:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
