@@ -6,8 +6,8 @@ import pytest
 
 from app.analysis import (
     ExtractedFact,
-    HeuristicFactExtractor,
     LLMFactExtractor,
+    _NoOpFactExtractor,
     _parse_extraction_payload,
     build_fact_extractor,
     validate_facts,
@@ -25,79 +25,6 @@ class _JsonProvider:
 
 
 # ---------------------------------------------------------------------------
-# HeuristicFactExtractor
-# ---------------------------------------------------------------------------
-
-
-def test_heuristic_extracts_first_person_statements() -> None:
-    extractor = HeuristicFactExtractor()
-    outcome = extractor.extract(
-        chat_session_id=uuid4(),
-        user_message="I met Sarah at dinner. She was really nice.",
-        assistant_message="That sounds lovely!",
-    )
-    assert len(outcome.facts) >= 1
-    assert any("Sarah" in f.text for f in outcome.facts)
-    assert outcome.used_provider == "heuristic"
-    assert all(f.subject == "User" for f in outcome.facts)
-    assert outcome.entities == []
-
-
-def test_heuristic_skips_questions() -> None:
-    extractor = HeuristicFactExtractor()
-    outcome = extractor.extract(
-        chat_session_id=uuid4(),
-        user_message="How are you doing today?",
-        assistant_message="I'm good!",
-    )
-    assert outcome.facts == []
-
-
-def test_heuristic_rewrites_to_third_person() -> None:
-    extractor = HeuristicFactExtractor()
-    outcome = extractor.extract(
-        chat_session_id=uuid4(),
-        user_message="I'm interested in magic.",
-        assistant_message="That's cool!",
-    )
-    assert len(outcome.facts) == 1
-    assert outcome.facts[0].text.startswith("User")
-    assert "I'm" not in outcome.facts[0].text
-
-
-def test_heuristic_skips_short_fragments() -> None:
-    extractor = HeuristicFactExtractor()
-    outcome = extractor.extract(
-        chat_session_id=uuid4(),
-        user_message="Hi. Ok. Sure.",
-        assistant_message="Hello!",
-    )
-    assert outcome.facts == []
-
-
-def test_heuristic_deduplicates_facts() -> None:
-    extractor = HeuristicFactExtractor()
-    outcome = extractor.extract(
-        chat_session_id=uuid4(),
-        user_message="I love cats. I really love cats.",
-        assistant_message="Cats are great!",
-    )
-    texts = [f.text for f in outcome.facts]
-    assert len(texts) == len(set(texts))
-
-
-def test_heuristic_handles_object_pronouns() -> None:
-    extractor = HeuristicFactExtractor()
-    outcome = extractor.extract(
-        chat_session_id=uuid4(),
-        user_message="Sarah told me about her trip.",
-        assistant_message="That's interesting!",
-    )
-    for fact in outcome.facts:
-        assert "me" not in fact.text.split()
-
-
-# ---------------------------------------------------------------------------
 # LLMFactExtractor
 # ---------------------------------------------------------------------------
 
@@ -110,7 +37,6 @@ def test_llm_extractor_parses_structured_json() -> None:
             '{"subject": "User", "predicate": "has", "object": "a cat named Luna", '
             '"text": "User has a cat named Luna"}]'
         ),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -132,7 +58,6 @@ def test_llm_extractor_handles_fenced_json() -> None:
             '```json\n[{"subject": "User", "predicate": "is", '
             '"object": "a teacher", "text": "User is a teacher"}]\n```'
         ),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -147,7 +72,6 @@ def test_llm_extractor_handles_fenced_json() -> None:
 def test_llm_extractor_returns_empty_on_empty_array() -> None:
     extractor = LLMFactExtractor(
         provider=_JsonProvider("[]"),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -158,10 +82,9 @@ def test_llm_extractor_returns_empty_on_empty_array() -> None:
     assert outcome.used_provider == "llm"
 
 
-def test_llm_extractor_falls_back_on_invalid_json() -> None:
+def test_llm_extractor_returns_empty_on_invalid_json() -> None:
     extractor = LLMFactExtractor(
         provider=_JsonProvider("not valid json at all"),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -169,33 +92,33 @@ def test_llm_extractor_falls_back_on_invalid_json() -> None:
         assistant_message="You'll do great!",
     )
     assert outcome.requested_provider == "llm"
-    assert outcome.used_provider == "heuristic"
+    assert outcome.used_provider == "llm"
     assert outcome.fallback_reason is not None
+    assert outcome.facts == []
 
 
-def test_llm_extractor_falls_back_on_provider_exception() -> None:
+def test_llm_extractor_returns_empty_on_provider_exception() -> None:
     class _FailingProvider:
         def generate(self, *, chat_session_id: object, messages: list[dict[str, str]]) -> str:
             raise RuntimeError("Connection refused")
 
     extractor = LLMFactExtractor(
         provider=_FailingProvider(),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
         user_message="I love hiking in the mountains.",
         assistant_message="That sounds wonderful!",
     )
-    assert outcome.used_provider == "heuristic"
+    assert outcome.used_provider == "llm"
     assert outcome.fallback_reason == "RuntimeError"
+    assert outcome.facts == []
     assert outcome.entities == []
 
 
 def test_llm_extractor_handles_legacy_string_format() -> None:
     extractor = LLMFactExtractor(
         provider=_JsonProvider('["User loves pizza", "User has a cat"]'),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -218,7 +141,6 @@ def test_llm_extractor_routes_companion_subject() -> None:
             '{"subject": "User", "predicate": "felt better after talking to", "object": "Ari", '
             '"text": "User felt better after talking to Ari"}]'
         ),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -241,7 +163,6 @@ def test_llm_extractor_preserves_subject_object_direction() -> None:
             '[{"subject": "User", "predicate": "was yelled at by", "object": "Sarah", '
             '"text": "User was yelled at by Sarah"}]'
         ),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -260,7 +181,6 @@ def test_llm_extractor_returns_entities() -> None:
             '"text": "User has a sister named Sarah"}], '
             '"entities": [{"name": "Sarah", "relationship": "sister", "aliases": ["sis"]}]}'
         ),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -281,7 +201,6 @@ def test_llm_extractor_wrapper_with_empty_entities() -> None:
             '{"facts": [{"subject": "User", "predicate": "loves", "object": "pizza", '
             '"text": "User loves pizza"}], "entities": []}'
         ),
-        fallback=HeuristicFactExtractor(),
     )
     outcome = extractor.extract(
         chat_session_id=uuid4(),
@@ -444,10 +363,10 @@ def test_validate_facts_companion_case_insensitive() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_fact_extractor_returns_heuristic_by_default() -> None:
+def test_build_fact_extractor_returns_noop_by_default() -> None:
     settings = Settings(inference_provider="mock", analysis_provider="heuristic")
     extractor = build_fact_extractor(settings)
-    assert isinstance(extractor, HeuristicFactExtractor)
+    assert isinstance(extractor, _NoOpFactExtractor)
 
 
 def test_build_fact_extractor_returns_llm_when_configured() -> None:

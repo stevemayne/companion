@@ -6,16 +6,13 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.agents import _parse_affect_response
+from app.agents import _parse_affect_response, _parse_state_response
 from app.config import Settings
 from app.main import create_app
 from app.schemas import CompanionAffect, MonologueState
 from app.services import (
     _build_affect_block,
     _build_user_context_block,
-    _derive_mood,
-    _extract_user_state,
-    _heuristic_affect_update,
     _strip_leaked_state,
     _strip_sycophantic_closer,
 )
@@ -39,148 +36,6 @@ def test_companion_affect_defaults() -> None:
     assert affect.curiosity == 6.0
     assert affect.vulnerability == 2.0
     assert affect.recent_triggers == []
-
-
-# ---------------------------------------------------------------------------
-# Heuristic affect updater
-# ---------------------------------------------------------------------------
-
-
-def test_heuristic_hostile_language_lowers_trust() -> None:
-    current = CompanionAffect(trust=5.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="neutral",
-        intent="statement",
-        message_content="You are so stupid and useless!",
-    )
-    assert updated.trust < 5.0
-    assert updated.attraction < current.attraction
-    assert any("hostile" in t for t in updated.recent_triggers)
-
-
-def test_heuristic_warm_language_raises_trust() -> None:
-    current = CompanionAffect(trust=3.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="neutral",
-        intent="statement",
-        message_content="I really appreciate you being here.",
-    )
-    assert updated.trust > 3.0
-    assert any("warm" in t for t in updated.recent_triggers)
-
-
-def test_heuristic_positive_emotion_raises_engagement() -> None:
-    current = CompanionAffect(engagement=5.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="positive",
-        intent="statement",
-        message_content="I'm so happy today!",
-    )
-    assert updated.engagement > 5.0
-
-
-def test_heuristic_anxious_emotion_raises_arousal() -> None:
-    current = CompanionAffect(arousal=0.3)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="anxious",
-        intent="statement",
-        message_content="I'm nervous about tomorrow.",
-    )
-    assert updated.arousal > 0.3
-
-
-def test_heuristic_normal_interaction_slowly_builds_comfort() -> None:
-    current = CompanionAffect(comfort_level=3.0, trust=3.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="neutral",
-        intent="statement",
-        message_content="Today I went to the store.",
-    )
-    assert updated.comfort_level > 3.0
-    assert updated.trust > 3.0
-
-
-def test_heuristic_hostile_language_increases_shyness() -> None:
-    current = CompanionAffect(shyness=5.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="neutral",
-        intent="statement",
-        message_content="You are so stupid!",
-    )
-    assert updated.shyness > 5.0
-    assert updated.patience < current.patience
-
-
-def test_heuristic_warm_language_decreases_shyness() -> None:
-    current = CompanionAffect(shyness=6.0, vulnerability=2.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="neutral",
-        intent="statement",
-        message_content="I really appreciate you being here.",
-    )
-    assert updated.shyness < 6.0
-    assert updated.vulnerability > 2.0
-
-
-def test_heuristic_question_increases_curiosity() -> None:
-    current = CompanionAffect(curiosity=5.0)
-    updated = _heuristic_affect_update(
-        current=current,
-        emotion="neutral",
-        intent="question",
-        message_content="What do you think about space travel?",
-    )
-    assert updated.curiosity > 5.0
-
-
-def test_heuristic_decay_prevents_saturation() -> None:
-    """After many neutral turns, values should stay near baseline, not max out."""
-    state = CompanionAffect()
-    for _ in range(100):
-        state = _heuristic_affect_update(
-            current=state,
-            emotion="neutral",
-            intent="statement",
-            message_content="Just chatting normally.",
-        )
-    assert state.trust < 5.0, f"trust saturated to {state.trust}"
-    assert state.comfort_level < 5.0, f"comfort saturated to {state.comfort_level}"
-    assert state.engagement < 7.0, f"engagement saturated to {state.engagement}"
-
-
-# ---------------------------------------------------------------------------
-# Mood derivation
-# ---------------------------------------------------------------------------
-
-
-def test_derive_mood_high_valence_high_arousal_is_excited() -> None:
-    assert _derive_mood(valence=0.5, arousal=0.7, triggers=[]) == "excited"
-
-
-def test_derive_mood_high_valence_low_arousal_is_fond() -> None:
-    assert _derive_mood(valence=0.5, arousal=0.3, triggers=[]) == "fond"
-
-
-def test_derive_mood_negative_valence_high_arousal_is_anxious() -> None:
-    assert _derive_mood(valence=-0.5, arousal=0.7, triggers=[]) == "anxious"
-
-
-def test_derive_mood_hostile_trigger_returns_hurt_or_withdrawn() -> None:
-    result = _derive_mood(
-        valence=-0.2, arousal=0.5, triggers=["hostile language detected"],
-    )
-    assert result in ("hurt", "withdrawn")
-
-
-def test_derive_mood_default_is_curious() -> None:
-    assert _derive_mood(valence=0.05, arousal=0.3, triggers=[]) == "curious"
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +98,63 @@ def test_parse_affect_response_invalid_returns_fallback() -> None:
 
 
 # ---------------------------------------------------------------------------
+# LLM state response parsing (affect + user_state)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_state_response_valid_json() -> None:
+    raw = (
+        '{"mood": "fond", "valence": 0.4, "arousal": 0.3, '
+        '"comfort_level": 5.0, "trust": 4.0, "attraction": 3.0, '
+        '"engagement": 6.0, "shyness": 5.0, "patience": 7.0, '
+        '"curiosity": 6.0, "vulnerability": 3.0, '
+        '"recent_triggers": ["warm conversation"], '
+        '"user_state": ["wearing a smart suit", "sitting on the couch"]}'
+    )
+    fallback_affect = CompanionAffect()
+    affect, user_state = _parse_state_response(
+        raw, fallback_affect=fallback_affect, fallback_user_state=[],
+    )
+    assert affect.mood == "fond"
+    assert affect.trust == 4.0
+    assert user_state == ["wearing a smart suit", "sitting on the couch"]
+
+
+def test_parse_state_response_missing_user_state_uses_fallback() -> None:
+    raw = '{"mood": "curious", "valence": 0.1}'
+    fallback_state = ["wearing a hat"]
+    affect, user_state = _parse_state_response(
+        raw,
+        fallback_affect=CompanionAffect(),
+        fallback_user_state=fallback_state,
+    )
+    assert affect.mood == "curious"
+    assert user_state == ["wearing a hat"]
+
+
+def test_parse_state_response_invalid_json_uses_fallbacks() -> None:
+    raw = "not json"
+    fallback_affect = CompanionAffect(mood="wary")
+    affect, user_state = _parse_state_response(
+        raw,
+        fallback_affect=fallback_affect,
+        fallback_user_state=["old state"],
+    )
+    assert affect.mood == "wary"
+    assert user_state == ["old state"]
+
+
+def test_parse_state_response_caps_user_state_at_8() -> None:
+    import json
+    entries = [f"state {i}" for i in range(12)]
+    raw = json.dumps({"mood": "curious", "valence": 0.1, "user_state": entries})
+    _, user_state = _parse_state_response(
+        raw, fallback_affect=CompanionAffect(), fallback_user_state=[],
+    )
+    assert len(user_state) == 8
+
+
+# ---------------------------------------------------------------------------
 # Integration: affect appears in system prompt
 # ---------------------------------------------------------------------------
 
@@ -286,33 +198,8 @@ def test_affect_state_appears_in_system_prompt_when_set() -> None:
 
 
 # ---------------------------------------------------------------------------
-# User state extraction
+# User context block rendering
 # ---------------------------------------------------------------------------
-
-
-def test_extract_user_state_action_sentences() -> None:
-    text = "I put on a smart suit. The weather is nice today."
-    result = _extract_user_state(text)
-    assert len(result) == 1
-    assert "suit" in result[0]
-
-
-def test_extract_user_state_let_me_form() -> None:
-    text = "Let me put on something more comfortable."
-    result = _extract_user_state(text)
-    assert len(result) == 1
-
-
-def test_extract_user_state_multiple_sentences() -> None:
-    text = "I sit down on the couch. I adjust my tie. How are you?"
-    result = _extract_user_state(text)
-    assert len(result) == 2
-
-
-def test_extract_user_state_ignores_non_physical() -> None:
-    text = "I think you're really great. I love this song."
-    result = _extract_user_state(text)
-    assert len(result) == 0
 
 
 def test_build_user_context_block_contains_items() -> None:
@@ -321,44 +208,6 @@ def test_build_user_context_block_contains_items() -> None:
     assert "I put on a smart suit" in block
     assert "I sit down" in block
     assert "THE USER" in block
-
-
-def test_user_state_persisted_across_turns() -> None:
-    app = create_app(Settings(
-        inference_provider="mock", enable_background_agents=False,
-    ))
-    client = TestClient(app)
-    session_id = str(uuid4())
-
-    client.post(
-        f"/v1/sessions/{session_id}/seed",
-        json={
-            "seed": {
-                "companion_name": "Ari",
-                "backstory": "Ari is reflective.",
-                "character_traits": ["curious"],
-                "goals": ["build trust"],
-                "relationship_setup": "Companion.",
-            },
-        },
-    )
-
-    # First turn: user describes an action
-    client.post(
-        "/v1/chat",
-        json={"chat_session_id": session_id, "message": "I put on a smart suit."},
-    )
-
-    # Second turn: user state should appear in system prompt
-    resp = client.post(
-        "/v1/chat",
-        json={"chat_session_id": session_id, "message": "How do I look?"},
-    )
-    assert resp.status_code == 200
-    content = resp.json()["assistant_message"]["content"]
-    # The actual user state content should be present (the section header
-    # gets stripped by _strip_leaked_state, but the item text remains).
-    assert "smart suit" in content.lower()
 
 
 # ---------------------------------------------------------------------------

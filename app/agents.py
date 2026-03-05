@@ -252,28 +252,30 @@ class BackgroundAgentDispatcher:
                 current.user_state if current is not None else []
             )
 
+            refined_affect = current_affect
+            refined_user_state = current_user_state
+
             if self._affect_refiner is not None:
                 recent = self._episodic_store.get_recent_messages(
                     chat_session_id=chat_session_id,
                     limit=6,
                 )
                 if recent:
-                    refined = self._llm_refine_affect(
-                        chat_session_id=chat_session_id,
-                        recent_messages=recent,
-                        current_affect=current_affect,
+                    refined_affect, refined_user_state = (
+                        self._llm_refine_state(
+                            chat_session_id=chat_session_id,
+                            recent_messages=recent,
+                            current_affect=current_affect,
+                            current_user_state=current_user_state,
+                        )
                     )
-                else:
-                    refined = current_affect
-            else:
-                refined = current_affect
 
             self._monologue_store.upsert(
                 MonologueState(
                     chat_session_id=chat_session_id,
                     internal_monologue=current_monologue,
-                    affect=refined,
-                    user_state=current_user_state,
+                    affect=refined_affect,
+                    user_state=refined_user_state,
                 )
             )
             self._increment(
@@ -350,26 +352,30 @@ class BackgroundAgentDispatcher:
             )
             self._increment(chat_session_id=chat_session_id, failures=1)
 
-    def _llm_refine_affect(
+    def _llm_refine_state(
         self,
         *,
         chat_session_id: UUID,
         recent_messages: list[Message],
         current_affect: CompanionAffect,
-    ) -> CompanionAffect:
-        """Call the analysis LLM to refine companion affect state."""
+        current_user_state: list[str],
+    ) -> tuple[CompanionAffect, list[str]]:
+        """Call the analysis LLM to refine affect and extract user state."""
         conversation_excerpt = "\n".join(
             f"{msg.role.upper()}: {msg.content}"
             for msg in recent_messages[-6:]
         )
         current_json = current_affect.model_dump_json()
+        state_json = json.dumps(current_user_state)
         prompt = (
             "You are an affect-state analyser for a companion AI. "
             "Given the recent conversation and the companion's current "
-            "internal state, return a revised affect state as strict "
-            "JSON.\n\n"
+            "internal state, return a revised affect state and the "
+            "user's current physical state as strict JSON.\n\n"
             "## Current companion affect\n"
             f"{current_json}\n\n"
+            "## Current user state\n"
+            f"{state_json}\n\n"
             "## Recent conversation\n"
             f"{conversation_excerpt}\n\n"
             "## Output format\n"
@@ -389,16 +395,25 @@ class BackgroundAgentDispatcher:
             "  vulnerability (float 0 to 10, willingness to share "
             "deeper feelings)\n"
             "  recent_triggers (list of up to 3 short strings explaining "
-            "what changed)\n\n"
-            "Adjust values modestly — this is a refinement, not a reset. "
-            "Return only JSON, no explanation."
+            "what changed)\n"
+            "  user_state (list of up to 8 short strings describing "
+            "the user's current physical state, appearance, clothing, "
+            "actions, or location — extracted from the USER's messages "
+            "only. Merge with the existing state: keep still-relevant "
+            "entries, drop outdated ones, add new observations.)\n\n"
+            "Adjust affect values modestly — this is a refinement, "
+            "not a reset. Return only JSON, no explanation."
         )
         assert self._affect_refiner is not None
         raw = self._affect_refiner.generate(
             chat_session_id=chat_session_id,
             messages=[{"role": "user", "content": prompt}],
         )
-        return _parse_affect_response(raw, fallback=current_affect)
+        return _parse_state_response(
+            raw,
+            fallback_affect=current_affect,
+            fallback_user_state=current_user_state,
+        )
 
     def _increment(
         self,
@@ -437,4 +452,45 @@ def _parse_affect_response(
         return CompanionAffect.model_validate(data)
     except Exception:
         return fallback
+
+
+def _parse_state_response(
+    raw: str,
+    *,
+    fallback_affect: CompanionAffect,
+    fallback_user_state: list[str],
+) -> tuple[CompanionAffect, list[str]]:
+    """Parse LLM state response containing affect + user_state."""
+    candidate = raw.strip()
+    fenced = re.search(
+        r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.DOTALL,
+    )
+    if fenced:
+        candidate = fenced.group(1)
+    else:
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start >= 0 and end > start:
+            candidate = candidate[start : end + 1]
+    try:
+        data = json.loads(candidate)
+    except Exception:
+        return fallback_affect, fallback_user_state
+
+    # Extract user_state before validating affect (which would reject
+    # the extra key).
+    raw_user_state = data.pop("user_state", None)
+    user_state = fallback_user_state
+    if isinstance(raw_user_state, list):
+        user_state = [
+            str(s).strip() for s in raw_user_state
+            if isinstance(s, str) and str(s).strip()
+        ][:8]
+
+    try:
+        affect = CompanionAffect.model_validate(data)
+    except Exception:
+        affect = fallback_affect
+
+    return affect, user_state
 

@@ -14,7 +14,6 @@ from fastapi import HTTPException, status
 
 from app.agents import BackgroundAgentDispatcher
 from app.analysis import (
-    ENTITY_STOPWORDS,
     IntentAnalyzer,
     build_fact_extractor,
     build_intent_analyzer,
@@ -509,42 +508,6 @@ def _strip_trailing_artifacts(text: str) -> str:
     return cleaned if cleaned else text
 
 
-_HOSTILITY_TERMS = {"hate", "shut up", "stupid", "annoying", "useless", "idiot"}
-_WARMTH_TERMS = {"love", "trust", "appreciate", "grateful", "thank", "missed you", "care"}
-_WITHDRAWAL_TERMS = {"leave me alone", "don't want to talk", "go away", "whatever"}
-
-_USER_STATE_KEYWORDS = {
-    "wear", "wearing", "put on", "take off", "dress", "dressed",
-    "change into", "slip into", "pull on", "throw on",
-    "sit", "sitting", "stand", "standing", "walk", "walking",
-    "hold", "holding", "carry", "carrying", "pick up",
-    "arrive", "arriving", "leave", "leaving", "head to", "move to",
-    "step", "lean", "leaning", "grab", "reach", "kneel", "kneeling",
-    "lie down", "lying", "look at", "looking at",
-    "adjust", "straighten", "smooth", "fix", "tuck",
-}
-
-_MAX_USER_STATE_ENTRIES = 8
-
-
-def _extract_user_state(content: str) -> list[str]:
-    """Extract sentences where the user describes their own physical actions or state."""
-    sentences = re.split(r"(?<=[.!?])\s+|\n", content.strip())
-    results: list[str] = []
-    for s in sentences:
-        s = s.strip("* ")
-        if not s:
-            continue
-        lowered = s.lower()
-        # "I put on ...", "Let me ..." — action statements
-        if re.match(r"^(?:i\b|let me\b)", lowered):
-            if any(kw in lowered for kw in _USER_STATE_KEYWORDS):
-                results.append(s.rstrip(".!? "))
-                continue
-        # "My hands are ...", "My tail grows ..." — possessive body/state
-        if re.match(r"^my\b", lowered):
-            results.append(s.rstrip(".!? "))
-    return results
 
 
 def _build_user_context_block(user_state: list[str]) -> str:
@@ -559,144 +522,6 @@ def _build_user_context_block(user_state: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _heuristic_affect_update(
-    *,
-    current: CompanionAffect,
-    emotion: str,
-    intent: str,
-    message_content: str,
-) -> CompanionAffect:
-    """Apply fast heuristic deltas to affect state. No LLM call."""
-    lowered = message_content.lower()
-
-    # Decay 15% toward baseline each turn to prevent saturation.
-    decay = 0.15
-    baselines = {
-        "engagement": 5.0,
-        "comfort_level": 3.0,
-        "trust": 3.0,
-        "attraction": 3.0,
-        "shyness": 6.0,
-        "patience": 7.0,
-        "curiosity": 6.0,
-        "vulnerability": 2.0,
-    }
-
-    def _decay(current_val: float, baseline: float) -> float:
-        return current_val + decay * (baseline - current_val)
-
-    engagement = _decay(current.engagement, baselines["engagement"])
-    comfort_level = _decay(current.comfort_level, baselines["comfort_level"])
-    trust = _decay(current.trust, baselines["trust"])
-    attraction = _decay(current.attraction, baselines["attraction"])
-    shyness = _decay(current.shyness, baselines["shyness"])
-    patience = _decay(current.patience, baselines["patience"])
-    curiosity = _decay(current.curiosity, baselines["curiosity"])
-    vulnerability = _decay(current.vulnerability, baselines["vulnerability"])
-    valence = current.valence * (1.0 - decay)
-    arousal = current.arousal * (1.0 - decay) + 0.3 * decay  # decay toward 0.3
-    triggers: list[str] = []
-
-    # Emotion signals
-    if emotion == "anxious":
-        valence -= 0.1
-        arousal += 0.15
-        comfort_level = max(0.0, comfort_level - 0.3)
-        patience += 0.2  # more patient when user is anxious
-        vulnerability += 0.3  # opens up empathetically
-        triggers.append("user expressed anxiety")
-    elif emotion == "positive":
-        valence += 0.1
-        engagement = min(10.0, engagement + 0.5)
-        shyness = max(0.0, shyness - 0.2)  # less shy with positive vibes
-        curiosity += 0.2  # encouraged to explore
-        triggers.append("user expressed positive feeling")
-
-    # Intent signals
-    if intent == "question":
-        engagement = min(10.0, engagement + 0.3)
-        curiosity += 0.3  # questions spark curiosity
-
-    # Lexical signals for interpersonal dynamics
-    if any(term in lowered for term in _HOSTILITY_TERMS):
-        valence -= 0.2
-        trust = max(0.0, trust - 0.5)
-        attraction = max(0.0, attraction - 0.3)
-        shyness = min(10.0, shyness + 0.5)  # retreats
-        patience = max(0.0, patience - 0.4)
-        vulnerability = max(0.0, vulnerability - 0.3)  # closes off
-        triggers.append("hostile language detected")
-    if any(term in lowered for term in _WARMTH_TERMS):
-        valence += 0.15
-        trust = min(10.0, trust + 0.2)
-        attraction = min(10.0, attraction + 0.15)
-        shyness = max(0.0, shyness - 0.3)  # warms up
-        vulnerability += 0.2  # opens up
-        triggers.append("warm/affectionate language")
-    if any(term in lowered for term in _WITHDRAWAL_TERMS):
-        engagement = max(0.0, engagement - 1.0)
-        arousal = max(0.0, arousal - 0.1)
-        shyness = min(10.0, shyness + 0.3)  # becomes more reserved
-        patience += 0.2  # gives space
-        triggers.append("user signaling withdrawal")
-
-    # Slow buildup on normal interactions (reduced from 0.1/0.05)
-    if not triggers:
-        comfort_level = min(10.0, comfort_level + 0.03)
-        trust = min(10.0, trust + 0.02)
-
-    # Clamp all values
-    valence = max(-1.0, min(1.0, valence))
-    arousal = max(0.0, min(1.0, arousal))
-    comfort_level = max(0.0, min(10.0, comfort_level))
-    trust = max(0.0, min(10.0, trust))
-    attraction = max(0.0, min(10.0, attraction))
-    engagement = max(0.0, min(10.0, engagement))
-    shyness = max(0.0, min(10.0, shyness))
-    patience = max(0.0, min(10.0, patience))
-    curiosity = max(0.0, min(10.0, curiosity))
-    vulnerability = max(0.0, min(10.0, vulnerability))
-
-    mood = _derive_mood(valence=valence, arousal=arousal, triggers=triggers)
-
-    return CompanionAffect(
-        mood=mood,
-        valence=round(valence, 3),
-        arousal=round(arousal, 3),
-        comfort_level=round(comfort_level, 2),
-        trust=round(trust, 2),
-        attraction=round(attraction, 2),
-        engagement=round(engagement, 2),
-        shyness=round(shyness, 2),
-        patience=round(patience, 2),
-        curiosity=round(curiosity, 2),
-        vulnerability=round(vulnerability, 2),
-        recent_triggers=triggers[-3:],
-    )
-
-
-def _derive_mood(*, valence: float, arousal: float, triggers: list[str]) -> str:
-    """Map valence/arousal coordinates to a mood label."""
-    trigger_text = " ".join(triggers).lower()
-    if "hostile" in trigger_text:
-        return "hurt" if valence > -0.5 else "withdrawn"
-    if "withdrawal" in trigger_text:
-        return "concerned"
-    if valence > 0.3 and arousal > 0.5:
-        return "excited"
-    if valence > 0.3 and arousal <= 0.5:
-        return "fond"
-    if valence > 0.0 and arousal > 0.4:
-        return "playful"
-    if valence > 0.0:
-        return "curious"
-    if valence < -0.3 and arousal > 0.5:
-        return "anxious"
-    if valence < -0.3:
-        return "wary"
-    if arousal < 0.2:
-        return "withdrawn"
-    return "curious"
 
 
 def _build_affect_block(affect: CompanionAffect) -> str:
@@ -810,6 +635,10 @@ class CognitiveOrchestrator:
             response = _strip_leaked_state(response)
             response = _strip_sycophantic_closer(response)
             response = _strip_trailing_artifacts(response)
+
+        if not response:
+            logger.warning("Response still empty after retry, using fallback")
+            response = "*nods quietly*"
 
         assistant_message = Message(
             chat_session_id=message.chat_session_id,
@@ -1006,34 +835,16 @@ class CognitiveOrchestrator:
         return updated
 
     def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
-        # Merge LLM-provided entities with a heuristic safety net so that
-        # MENTIONED_IN_SESSION relations are always written even when the LLM
-        # analysis returns an empty entity list.
-        heuristic_entities: list[str] = []
-        for token in message.content.split():
-            _PUNCT = r"[,.!?;:()\[\]{}\"\u2018\u2019\u201c\u201d']+"
-            cleaned = re.sub(
-                rf"^{_PUNCT}|{_PUNCT}$", "", token,
-            )
-            if not cleaned or len(cleaned) <= 1 or not cleaned[:1].isupper():
-                continue
-            if cleaned.lower() in ENTITY_STOPWORDS:
-                continue
-            heuristic_entities.append(cleaned)
-        merged: list[str] = list(preprocess.entities)
-        seen = {e.lower() for e in merged}
-        for entity in heuristic_entities:
-            if entity.lower() not in seen:
-                seen.add(entity.lower())
-                merged.append(entity)
-
         graph_writes: list[str] = []
-        for entity in merged:
+        for entity in preprocess.entities:
+            cleaned = entity.strip()
+            if not cleaned:
+                continue
             relation = GraphRelation(
                 chat_session_id=message.chat_session_id,
                 source="user",
                 relation="MENTIONED_IN_SESSION",
-                target=entity,
+                target=cleaned,
             )
             self.graph_store.upsert_relation(relation)
             graph_writes.append(f"{relation.source}-{relation.relation}->{relation.target}")
@@ -1046,27 +857,19 @@ class CognitiveOrchestrator:
         current_state = self.monologue_store.get(
             chat_session_id=message.chat_session_id,
         )
+        # Preserve current affect and user_state — the background LLM
+        # reflector updates both asynchronously after each turn.
         current_affect = (
             current_state.affect if current_state is not None else CompanionAffect()
         )
-        new_affect = _heuristic_affect_update(
-            current=current_affect,
-            emotion=preprocess.emotion,
-            intent=preprocess.intent,
-            message_content=message.content,
-        )
-
-        # Track user-described physical state (appearance, actions, location)
-        prev_user_state = (
+        user_state = (
             current_state.user_state if current_state is not None else []
         )
-        new_descriptions = _extract_user_state(message.content)
-        user_state = (prev_user_state + new_descriptions)[-_MAX_USER_STATE_ENTRIES:]
 
         monologue_state = MonologueState(
             chat_session_id=message.chat_session_id,
             internal_monologue=reflection,
-            affect=new_affect,
+            affect=current_affect,
             user_state=user_state,
         )
         self.monologue_store.upsert(monologue_state)
@@ -1074,7 +877,7 @@ class CognitiveOrchestrator:
             "semantic_upserts": [],
             "graph_upserts": graph_writes,
             "monologue": monologue_state.internal_monologue,
-            "affect": new_affect.model_dump(),
+            "affect": current_affect.model_dump(),
         }
 
     def _summarize_messages(self, messages: list[dict[str, str]]) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -12,6 +13,8 @@ from pydantic import BaseModel, Field, field_validator
 from app.config import Settings
 from app.inference import EndpointConfig, OpenAICompatibleProvider
 from app.schemas import PreprocessResult
+
+logger = logging.getLogger(__name__)
 
 ENTITY_STOPWORDS = {
     # Question words
@@ -489,13 +492,6 @@ def _parse_llm_payload(raw: str) -> _LLMAnalysisPayload:
 # Fact extraction
 # ---------------------------------------------------------------------------
 
-_FIRST_PERSON = re.compile(
-    r"\b(i\s+am|i'm|i\s+was|i\s+have|i\s+had|i\s+feel|i\s+like|i\s+love|"
-    r"i\s+want|i\s+need|i\s+think|i\s+know|i\s+went|i\s+met|i\s+saw|"
-    r"i\s+argued|i\s+told|my\s+\w+|we\s+\w+)\b",
-    re.IGNORECASE,
-)
-_SENTENCE_SPLIT = re.compile(r"[.!?]+")
 
 
 @dataclass(frozen=True)
@@ -618,53 +614,9 @@ class FactExtractor(Protocol):
     ) -> ExtractionOutcome: ...
 
 
-class HeuristicFactExtractor:
-    def extract(
-        self,
-        *,
-        chat_session_id: UUID,
-        user_message: str,
-        assistant_message: str,
-        companion_name: str | None = None,
-    ) -> ExtractionOutcome:
-        del chat_session_id, assistant_message
-        start = perf_counter()
-        facts: list[ExtractedFact] = []
-        seen_texts: set[str] = set()
-        sentences = [s.strip() for s in _SENTENCE_SPLIT.split(user_message) if s.strip()]
-        for sentence in sentences:
-            if "?" in sentence:
-                continue
-            if len(sentence.split()) < 3:
-                continue
-            if _FIRST_PERSON.search(sentence):
-                text = _to_declarative(sentence)
-                if text and text not in seen_texts:
-                    seen_texts.add(text)
-                    importance = _heuristic_importance(sentence)
-                    facts.append(
-                        ExtractedFact(
-                            subject="User",
-                            predicate="",
-                            object="",
-                            text=text,
-                            importance=importance,
-                        )
-                    )
-        facts = validate_facts(facts, companion_name)
-        return ExtractionOutcome(
-            facts=facts,
-            requested_provider="heuristic",
-            used_provider="heuristic",
-            fallback_reason=None,
-            latency_ms=(perf_counter() - start) * 1000,
-        )
-
-
 class LLMFactExtractor:
-    def __init__(self, *, provider: ModelProvider, fallback: FactExtractor) -> None:
+    def __init__(self, *, provider: ModelProvider) -> None:
         self._provider = provider
-        self._fallback = fallback
 
     def extract(
         self,
@@ -709,16 +661,13 @@ class LLMFactExtractor:
                 entities=entities,
             )
         except Exception as exc:  # noqa: BLE001
-            fallback = self._fallback.extract(
-                chat_session_id=chat_session_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                companion_name=companion_name,
+            logger.warning(
+                "LLM fact extraction failed: %s", exc,
             )
             return ExtractionOutcome(
-                facts=fallback.facts,
+                facts=[],
                 requested_provider="llm",
-                used_provider=fallback.used_provider,
+                used_provider="llm",
                 fallback_reason=type(exc).__name__,
                 latency_ms=(perf_counter() - start) * 1000,
             )
@@ -744,11 +693,16 @@ class LLMFactExtractor:
             "- importance: float 0.0-1.0. Relationships and core identity "
             "(0.7-0.9), preferences and opinions (0.5-0.7), transient "
             "observations (0.2-0.4).\n"
+            "- The subject must be WHO THE FACT IS ABOUT, not who caused "
+            "or mentioned it. If the user transforms the companion's body, "
+            f"the resulting physical state is a fact about {name}, not the "
+            "user. If the companion describes the user's trait, the subject "
+            "is 'User'.\n"
             "- Pay careful attention to WHO says WHAT. Preserve the direction "
             "of the relationship exactly as stated.\n\n"
             "## User facts\n"
             "Extract personal details, preferences, relationships, events, "
-            "emotions, plans, and opinions the USER reveals about themselves.\n\n"
+            "emotions, plans, and opinions ABOUT the user.\n\n"
             f"## {name}'s self-facts\n"
             f"Extract identity, preferences, personal history, skills, "
             f"abilities, and actions that reveal {name}'s traits or state. "
@@ -806,33 +760,31 @@ class LLMFactExtractor:
         )
 
 
-_HIGH_IMPORTANCE_PATTERNS = re.compile(
-    r"\b(love|hate|afraid|scared|always|never|family|married|divorced|"
-    r"sister|brother|mother|father|daughter|son|wife|husband|partner|"
-    r"best friend|allergic|diagnosed|believe|religion|faith)\b",
-    re.IGNORECASE,
-)
-_MEDIUM_IMPORTANCE_PATTERNS = re.compile(
-    r"\b(like|enjoy|prefer|dislike|work|job|hobby|live|moved|"
-    r"friend|met|dating|relationship|plan|goal|dream)\b",
-    re.IGNORECASE,
-)
+class _NoOpFactExtractor:
+    """Returns empty results when LLM extraction is not configured."""
 
-
-def _heuristic_importance(sentence: str) -> float:
-    """Assign importance 0.0-1.0 based on sentence content."""
-    if _HIGH_IMPORTANCE_PATTERNS.search(sentence):
-        return 0.8
-    if _MEDIUM_IMPORTANCE_PATTERNS.search(sentence):
-        return 0.6
-    return 0.4
+    def extract(
+        self,
+        *,
+        chat_session_id: UUID,
+        user_message: str,
+        assistant_message: str,
+        companion_name: str | None = None,
+    ) -> ExtractionOutcome:
+        del chat_session_id, user_message, assistant_message, companion_name
+        return ExtractionOutcome(
+            facts=[],
+            requested_provider="none",
+            used_provider="none",
+            fallback_reason=None,
+            latency_ms=0.0,
+        )
 
 
 def build_fact_extractor(settings: Settings) -> FactExtractor:
     provider = settings.analysis_provider.strip().lower()
-    heuristic = HeuristicFactExtractor()
     if provider != "llm":
-        return heuristic
+        return _NoOpFactExtractor()
 
     llm_provider = OpenAICompatibleProvider(
         endpoint=EndpointConfig(
@@ -843,22 +795,7 @@ def build_fact_extractor(settings: Settings) -> FactExtractor:
         timeout_seconds=settings.analysis_timeout_seconds,
         max_retries=settings.analysis_max_retries,
     )
-    return LLMFactExtractor(provider=llm_provider, fallback=heuristic)
-
-
-def _to_declarative(sentence: str) -> str:
-    text = sentence.strip().rstrip(".")
-    text = re.sub(r"^I'm\b", "User is", text)
-    text = re.sub(r"^I\b", "User", text)
-    text = re.sub(r"\bI'm\b", "user is", text)
-    text = re.sub(r"\bI\b", "user", text)
-    text = re.sub(r"\b[Mm]y\b", "user's", text)
-    text = re.sub(r"\bme\b", "user", text)
-    text = re.sub(r"\bmyself\b", "user", text)
-    text = re.sub(r"\bmine\b", "user's", text)
-    if text:
-        text = text[0].upper() + text[1:]
-    return text
+    return LLMFactExtractor(provider=llm_provider)
 
 
 def _parse_extraction_payload(raw: str) -> tuple[list[ExtractedFact], list[EntityMention]]:

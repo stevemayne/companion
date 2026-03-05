@@ -141,6 +141,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"X-Request-ID": getattr(request.state, "request_id", "unknown")},
         )
 
+    @app.exception_handler(Exception)
+    def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logging.getLogger("aether.http").exception(
+            "Unhandled exception on %s %s", request.method, request.url.path,
+        )
+        body = ApiErrorResponse(
+            error=ApiErrorBody(code="internal_error", message="Internal server error")
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=body.model_dump(),
+            headers={"X-Request-ID": getattr(request.state, "request_id", "unknown")},
+        )
+
     @app.exception_handler(RequestValidationError)
     def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         body = ApiErrorResponse(
@@ -196,11 +210,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
         container = get_container(request)
-        return container.chat_service.run_chat(
-            request=sanitized,
-            idempotency_key=idempotency_key,
-            safety_transforms=safety_transforms,
-        )
+        try:
+            return container.chat_service.run_chat(
+                request=sanitized,
+                idempotency_key=idempotency_key,
+                safety_transforms=safety_transforms,
+            )
+        except Exception:
+            logging.getLogger("aether.chat").exception(
+                "chat failed session=%s", payload.chat_session_id,
+            )
+            raise
 
     @app.get(
         "/v1/chat/stream",
@@ -228,12 +248,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             message=sanitized_message,
         )
         container = get_container(request)
-        chat_result = container.chat_service.run_chat(
-            request=sanitized,
-            idempotency_key=idempotency_key,
-            safety_transforms=safety_transforms,
-        )
         request_id = getattr(request.state, "request_id", str(uuid4()))
+        logger = logging.getLogger("aether.stream")
+
+        try:
+            chat_result = container.chat_service.run_chat(
+                request=sanitized,
+                idempotency_key=idempotency_key,
+                safety_transforms=safety_transforms,
+            )
+        except Exception:
+            logger.exception(
+                "chat_stream failed session=%s request_id=%s",
+                chat_session_id,
+                request_id,
+            )
+            raise
 
         async def event_generator() -> AsyncIterator[str]:
             yield sse_event(

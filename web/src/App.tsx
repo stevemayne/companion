@@ -422,6 +422,14 @@ export function App() {
                 {tab.charAt(0).toUpperCase() + tab.slice(1)}
               </button>
             ))}
+            <button
+              type="button"
+              className="drawer-close"
+              onClick={() => setSidebarOpen(false)}
+              aria-label="Close sidebar"
+            >
+              &times;
+            </button>
           </nav>
 
           <div className="drawer-body">
