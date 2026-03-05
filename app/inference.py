@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +13,8 @@ import httpx
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+LOGS_DIR: Path | None = Path("logs/inference")
 
 
 class InferenceError(RuntimeError):
@@ -21,6 +26,19 @@ class EndpointConfig:
     model: str
     base_url: str
     api_key: str | None
+
+
+def _log_to_session_file(chat_session_id: UUID, record: dict[str, Any]) -> None:
+    """Append a JSON-lines record to a per-session log file."""
+    if LOGS_DIR is None:
+        return
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        path = LOGS_DIR / f"{chat_session_id}.jsonl"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception:
+        logger.debug("Failed to write inference log for session %s", chat_session_id)
 
 
 class MockInferenceProvider:
@@ -53,11 +71,10 @@ class OpenAICompatibleProvider:
         self._client = client or httpx.Client(timeout=timeout_seconds)
 
     def generate(self, *, chat_session_id: UUID, messages: list[dict[str, str]]) -> str:
-        del chat_session_id
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
-                return self._call_api(messages)
+                return self._call_api(messages, chat_session_id=chat_session_id)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 logger.warning(
@@ -68,7 +85,12 @@ class OpenAICompatibleProvider:
                 )
         raise InferenceError("Primary inference endpoint failed.") from last_error
 
-    def _call_api(self, messages: list[dict[str, str]]) -> str:
+    def _call_api(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        chat_session_id: UUID | None = None,
+    ) -> str:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._endpoint.api_key:
             headers["Authorization"] = f"Bearer {self._endpoint.api_key}"
@@ -83,15 +105,53 @@ class OpenAICompatibleProvider:
         if self._max_tokens is not None:
             body["max_tokens"] = self._max_tokens
 
+        start = perf_counter()
         response = self._client.post(
             f"{self._endpoint.base_url.rstrip('/')}/chat/completions",
             headers=headers,
             json=body,
             timeout=self._timeout_seconds,
         )
+        duration_ms = (perf_counter() - start) * 1000
         response.raise_for_status()
         payload = response.json()
-        return _extract_content(payload)
+
+        content = _extract_content(payload)
+        finish_reason = _extract_finish_reason(payload)
+        usage = payload.get("usage")
+
+        logger.info(
+            "inference complete model=%s finish_reason=%s "
+            "prompt_tokens=%s completion_tokens=%s duration_ms=%.0f",
+            self._endpoint.model,
+            finish_reason,
+            usage.get("prompt_tokens") if usage else None,
+            usage.get("completion_tokens") if usage else None,
+            duration_ms,
+        )
+
+        if finish_reason == "length":
+            logger.warning(
+                "Response truncated (finish_reason=length). "
+                "prompt_tokens=%s completion_tokens=%s max_tokens=%s",
+                usage.get("prompt_tokens") if usage else "?",
+                usage.get("completion_tokens") if usage else "?",
+                self._max_tokens,
+            )
+
+        if chat_session_id is not None:
+            _log_to_session_file(chat_session_id, {
+                "model": self._endpoint.model,
+                "max_tokens": self._max_tokens,
+                "message_count": len(messages),
+                "finish_reason": finish_reason,
+                "usage": usage,
+                "duration_ms": round(duration_ms, 1),
+                "request_messages": messages,
+                "response_content": content,
+            })
+
+        return content
 
 
 class FailoverInferenceProvider:
@@ -173,3 +233,10 @@ def _extract_content(payload: dict[str, Any]) -> str:
     if not isinstance(content, str) or not content.strip():
         raise InferenceError("Inference response missing message content.")
     return content
+
+
+def _extract_finish_reason(payload: dict[str, Any]) -> str | None:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        return choices[0].get("finish_reason")
+    return None

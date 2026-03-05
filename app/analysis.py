@@ -492,12 +492,6 @@ def _parse_llm_payload(raw: str) -> _LLMAnalysisPayload:
 # Fact extraction
 # ---------------------------------------------------------------------------
 
-CANONICAL_RELATION_TYPES: frozenset[str] = frozenset({
-    "IS", "HAS", "LIKES", "DISLIKES", "WANTS", "FEELS",
-    "EXPERIENCED", "DOES", "KNOWS", "SAID", "RELATES_TO", "LOCATED_AT",
-})
-
-
 @dataclass(frozen=True)
 class ExtractedFact:
     subject: str
@@ -505,13 +499,14 @@ class ExtractedFact:
     object: str
     text: str
     importance: float = 0.5
-    relation_type: str = "RELATES_TO"
 
 
 @dataclass(frozen=True)
 class EntityMention:
     name: str
     relationship: str
+    owner: str = "User"
+    entity_type: str = "person"
     aliases: list[str] = field(default_factory=list)
 
 
@@ -691,7 +686,7 @@ class LLMFactExtractor:
             "and any named entities mentioned.\n\n"
             "## Fact rules\n"
             "- Each fact must have: subject, predicate, object, text, "
-            "importance, relation_type.\n"
+            "importance.\n"
             f"- subject: 'User' for user facts, '{name}' for companion self-facts.\n"
             "- predicate: the verb phrase.\n"
             "- object: the target of the action.\n"
@@ -699,21 +694,6 @@ class LLMFactExtractor:
             "- importance: float 0.0-1.0. Relationships and core identity "
             "(0.7-0.9), preferences and opinions (0.5-0.7), transient "
             "observations (0.2-0.4).\n"
-            "- relation_type: one of these canonical types that best "
-            "categorizes the fact:\n"
-            "  IS (identity, profession, state of being), "
-            "HAS (possession, attributes, body parts), "
-            "LIKES (preferences, enjoyment), "
-            "DISLIKES (aversions, negative preferences), "
-            "WANTS (explicit unfulfilled goals or wishes), "
-            "FEELS (emotions, moods, internal states), "
-            "EXPERIENCED (past events, things that happened), "
-            "DOES (actions, movements, habits, activities), "
-            "KNOWS (knowledge, skills, awareness), "
-            "SAID (statements, suggestions, imaginings), "
-            "RELATES_TO (interpersonal relationships), "
-            "LOCATED_AT (lives, works, or is currently at a place). "
-            "Pick the single best match.\n"
             "- The subject must be WHO THE FACT IS ABOUT, not who caused "
             "or mentioned it. If the user transforms the companion's body, "
             f"the resulting physical state is a fact about {name}, not the "
@@ -737,31 +717,59 @@ class LLMFactExtractor:
             "- Meta-statements ('I'm here for you', 'I want to help')\n"
             "- Empathy expressions ('I can see why you feel that way')\n\n"
             "## Entity rules\n"
-            "- Each entity must have: name (canonical form), relationship (to "
-            "the user: 'sister', 'boss', 'friend', 'pet', etc. — empty string "
-            "if unknown), aliases (nicknames, empty array if none).\n"
-            "- Only extract people, pets, or organizations.\n\n"
+            "- Only extract entities that represent LASTING relationships, "
+            "identities, or ongoing concerns — people, pets, workplaces, "
+            "homes, long-term projects, recurring hobbies. "
+            "Do NOT extract transient mentions (a meal, a material used "
+            "once, a one-off action, a generic object).\n"
+            "- Each entity MUST have a non-empty relationship. If you "
+            "cannot name the relationship in 1-2 words, do not extract "
+            "the entity.\n"
+            "- name: short canonical form, 1-3 words. Use the most "
+            "specific known name (e.g. 'Transform-o-Matic' not 'device'). "
+            "Never a sentence fragment.\n"
+            "- relationship: how the entity relates to the owner — a short "
+            "label like 'sister', 'workplace', 'research project', 'hobby', "
+            "'home'. Keep these generic and reusable. "
+            "Good: sister, friend, workplace, pet, hobby, research project, "
+            "home city. "
+            "Bad: material_transformed, storage_location, meal, "
+            "thing_mentioned.\n"
+            f"- owner: 'User' or '{name}' — who this entity belongs to.\n"
+            "- entity_type: person, pet, place, organization, project, "
+            "concept.\n"
+            "- aliases: genuine nicknames or shortened names used by the "
+            "speakers. 'sis' for Sarah = good. Do NOT include trivial "
+            "variations like adding/removing articles ('the lab' for 'Lab') "
+            "or restating the name. Empty array if no real nicknames.\n"
+            "- Do not create a second, vaguer entity for something already "
+            "named more specifically.\n\n"
             "## Output format\n"
             "Return strict JSON with keys 'facts' and 'entities'.\n\n"
             "Example 1:\n"
-            '  User: "My sister Sarah started a new job."\n'
+            '  User: "My sister Sarah started a new job at Google."\n'
             f'  {name}: "That\'s wonderful! I used to work in HR myself."\n'
             "  {{\n"
             '    "facts": [\n'
             '      {{"subject": "User", "predicate": "has sister who started",'
-            ' "relation_type": "RELATES_TO", "object": "a new job",'
+            ' "object": "a new job",'
             ' "text": "User\'s sister Sarah started a new job",'
             ' "importance": 0.7}},\n'
             f'      {{"subject": "{name}", "predicate": "used to work in",'
-            f' "relation_type": "EXPERIENCED", "object": "HR",'
+            f' "object": "HR",'
             f' "text": "{name} used to work in HR",'
             ' "importance": 0.5}}\n'
             "    ],\n"
             '    "entities": [\n'
             '      {{"name": "Sarah", "relationship": "sister",'
+            ' "owner": "User", "entity_type": "person",'
+            ' "aliases": []}},\n'
+            '      {{"name": "Google", "relationship": "workplace",'
+            ' "owner": "User", "entity_type": "organization",'
             ' "aliases": []}}\n'
             "    ]\n"
-            "  }}\n\n"
+            "  }}\n"
+            "  Note: 'new job' is a transient event, not an entity.\n\n"
             "Example 2 (roleplay actions):\n"
             '  User: "Can you try lifting that boulder?"\n'
             f'  {name}: "*I test out my newfound strength by easily '
@@ -769,7 +777,7 @@ class LLMFactExtractor:
             "  {{\n"
             '    "facts": [\n'
             f'      {{"subject": "{name}", "predicate": "has",'
-            f' "relation_type": "HAS", "object": "newfound strength",'
+            f' "object": "newfound strength",'
             f' "text": "{name} has newfound strength and can easily lift '
             'heavy objects",'
             ' "importance": 0.6}}\n'
@@ -872,8 +880,6 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                 importance = max(0.0, min(1.0, float(raw_importance)))
             except (TypeError, ValueError):
                 importance = 0.5
-            raw_rt = str(item.get("relation_type", "RELATES_TO")).strip().upper()
-            relation_type = raw_rt if raw_rt in CANONICAL_RELATION_TYPES else "RELATES_TO"
             if text and subject and text not in seen_texts:
                 seen_texts.add(text)
                 facts.append(
@@ -883,7 +889,6 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                         object=obj,
                         text=text,
                         importance=importance,
-                        relation_type=relation_type,
                     )
                 )
         elif isinstance(item, str):
@@ -892,6 +897,18 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                 seen_texts.add(cleaned)
                 facts.append(ExtractedFact(subject="User", predicate="", object="", text=cleaned))
     return facts
+
+
+def _is_trivial_alias(name: str, alias: str) -> bool:
+    """Reject aliases that are just article/case variants of the entity name."""
+    n = name.lower().strip()
+    a = alias.lower().strip()
+    for article in ("the ", "a ", "an "):
+        if n.startswith(article):
+            n = n[len(article):]
+        if a.startswith(article):
+            a = a[len(article):]
+    return n == a
 
 
 def _parse_entities_list(items: list) -> list[EntityMention]:
@@ -905,7 +922,16 @@ def _parse_entities_list(items: list) -> list[EntityMention]:
             continue
         seen_names.add(name.lower())
         relationship = str(item.get("relationship", "")).strip()
+        owner = str(item.get("owner", "User")).strip() or "User"
+        entity_type = str(item.get("entity_type", "person")).strip() or "person"
         raw_aliases = item.get("aliases", [])
-        aliases = [str(a).strip() for a in raw_aliases if isinstance(a, str) and str(a).strip()]
-        entities.append(EntityMention(name=name, relationship=relationship, aliases=aliases))
+        aliases = [
+            str(a).strip() for a in raw_aliases
+            if isinstance(a, str) and str(a).strip()
+            and not _is_trivial_alias(name, str(a).strip())
+        ]
+        entities.append(EntityMention(
+            name=name, relationship=relationship,
+            owner=owner, entity_type=entity_type, aliases=aliases,
+        ))
     return entities

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import app.inference as _inference_mod
 from app.config import get_settings
 
 
@@ -16,6 +17,8 @@ def isolate_from_dotenv(monkeypatch: pytest.MonkeyPatch):
     """
     monkeypatch.setenv("ENV_FILE", "/dev/null")
     monkeypatch.setattr("app.config.Settings.model_config", {"env_file": ""})
+    # Disable per-session inference log files during tests
+    monkeypatch.setattr(_inference_mod, "LOGS_DIR", None)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

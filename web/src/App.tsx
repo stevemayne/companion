@@ -6,6 +6,8 @@ import { DebugPanel } from "./DebugPanel";
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
 import { CompanionAffect, fetchKnowledge, GraphRelation, MemoryFact } from "./knowledgeApi";
 import { KnowledgePanel } from "./KnowledgePanel";
+import { fetchInferenceLogs, InferenceLogEntry } from "./logsApi";
+import { InferenceLogPanel } from "./InferenceLogPanel";
 import { fetchMemory } from "./memoryApi";
 import { SeedPayload, upsertSeed } from "./seedApi";
 import { fetchSessions, SessionSummary } from "./sessionApi";
@@ -133,6 +135,10 @@ export function App() {
   const [showRawPrompt, setShowRawPrompt] = useState(false);
   const [verboseDebug, setVerboseDebug] = useState(false);
 
+  const [inferenceLogsOpen, setInferenceLogsOpen] = useState(false);
+  const [inferenceLogsStatus, setInferenceLogsStatus] = useState("idle");
+  const [inferenceLogs, setInferenceLogs] = useState<InferenceLogEntry[]>([]);
+
   const [isKnowledgeOpen, setIsKnowledgeOpen] = useState(false);
   const [knowledgeStatus, setKnowledgeStatus] = useState("idle");
   const [knowledgeFacts, setKnowledgeFacts] = useState<MemoryFact[]>([]);
@@ -226,6 +232,24 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       setKnowledgeStatus(message);
+    }
+  };
+
+  const refreshInferenceLogs = async (targetSessionId?: string): Promise<void> => {
+    const selectedSession = (targetSessionId ?? sessionId).trim();
+    if (!selectedSession) {
+      setInferenceLogsStatus("no session");
+      return;
+    }
+    setInferenceLogsStatus("loading");
+    try {
+      const data = await fetchInferenceLogs(selectedSession);
+      setInferenceLogs(data.entries);
+      setInferenceLogsStatus(`loaded (${data.count})`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      setInferenceLogsStatus(message);
+      setInferenceLogs([]);
     }
   };
 
@@ -454,6 +478,22 @@ export function App() {
                       <span className="meta">
                         {formatTimestamp(item.updated_at)} · {item.message_count} msgs
                       </span>
+                      <span className="session-id-row">
+                        <code className="session-id">{item.chat_session_id}</code>
+                        <button
+                          type="button"
+                          className="copy-btn"
+                          title="Copy session ID"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void navigator.clipboard.writeText(item.chat_session_id);
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z"/>
+                          </svg>
+                        </button>
+                      </span>
                     </button>
                   ))}
                   {sessions.length === 0 && <div className="meta">No saved sessions yet.</div>}
@@ -566,6 +606,17 @@ export function App() {
                   verbose={verboseDebug}
                   setVerbose={setVerboseDebug}
                 />
+                <button
+                  type="button"
+                  className="row"
+                  style={{ marginTop: 8, justifyContent: "center" }}
+                  onClick={() => {
+                    void refreshInferenceLogs();
+                    setInferenceLogsOpen(true);
+                  }}
+                >
+                  Inference Logs
+                </button>
               </div>
             )}
           </div>
@@ -626,6 +677,16 @@ export function App() {
           </button>
         </form>
       </main>
+
+      {inferenceLogsOpen && (
+        <InferenceLogPanel
+          entries={inferenceLogs}
+          status={inferenceLogsStatus}
+          sessionId={sessionId}
+          onClose={() => setInferenceLogsOpen(false)}
+          onRefresh={() => void refreshInferenceLogs()}
+        />
+      )}
     </div>
   );
 }

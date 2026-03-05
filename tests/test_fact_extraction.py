@@ -7,6 +7,7 @@ import pytest
 from app.analysis import (
     ExtractedFact,
     LLMFactExtractor,
+    _is_trivial_alias,
     _NoOpFactExtractor,
     _parse_extraction_payload,
     build_fact_extractor,
@@ -305,27 +306,59 @@ def test_parse_extraction_fenced_wrapper() -> None:
     assert entities == []
 
 
-def test_parse_extraction_relation_type_defaults_to_relates_to() -> None:
-    facts, _ = _parse_extraction_payload(
-        '[{"subject": "User", "predicate": "likes", "object": "tea", "text": "User likes tea"}]'
+def test_parse_extraction_entity_owner_and_type() -> None:
+    _, entities = _parse_extraction_payload(
+        '{"facts": [], "entities": ['
+        '{"name": "Sarah", "relationship": "sister", "owner": "User", '
+        '"entity_type": "person", "aliases": []},'
+        '{"name": "polymer compounds", "relationship": "research project", '
+        '"owner": "Chloe", "entity_type": "project", "aliases": ["polymers"]}'
+        ']}'
     )
-    assert facts[0].relation_type == "RELATES_TO"
+    assert len(entities) == 2
+    assert entities[0].name == "Sarah"
+    assert entities[0].owner == "User"
+    assert entities[0].entity_type == "person"
+    assert entities[1].name == "polymer compounds"
+    assert entities[1].owner == "Chloe"
+    assert entities[1].entity_type == "project"
+    assert entities[1].aliases == ["polymers"]
 
 
-def test_parse_extraction_relation_type_parsed() -> None:
-    facts, _ = _parse_extraction_payload(
-        '[{"subject": "User", "predicate": "likes", "object": "tea", '
-        '"text": "User likes tea", "relation_type": "LIKES"}]'
+def test_parse_extraction_entity_defaults_owner_and_type() -> None:
+    _, entities = _parse_extraction_payload(
+        '{"facts": [], "entities": ['
+        '{"name": "Sarah", "relationship": "friend", "aliases": []}'
+        ']}'
     )
-    assert facts[0].relation_type == "LIKES"
+    assert entities[0].owner == "User"
+    assert entities[0].entity_type == "person"
 
 
-def test_parse_extraction_unknown_relation_type_falls_back() -> None:
-    facts, _ = _parse_extraction_payload(
-        '[{"subject": "User", "predicate": "likes", "object": "tea", '
-        '"text": "User likes tea", "relation_type": "INVENTED_TYPE"}]'
+def test_trivial_alias_filtered() -> None:
+    assert _is_trivial_alias("Lab", "the lab") is True
+    assert _is_trivial_alias("Lab", "The Lab") is True
+    assert _is_trivial_alias("the lab", "lab") is True
+    # Verify it's actually filtered from parsed entities
+    _, entities = _parse_extraction_payload(
+        '{"facts": [], "entities": ['
+        '{"name": "Lab", "relationship": "workplace", "owner": "Chloe", '
+        '"entity_type": "place", "aliases": ["the lab"]}'
+        ']}'
     )
-    assert facts[0].relation_type == "RELATES_TO"
+    assert entities[0].aliases == []
+
+
+def test_genuine_alias_kept() -> None:
+    assert _is_trivial_alias("Sarah", "sis") is False
+    assert _is_trivial_alias("George", "Babe") is False
+    _, entities = _parse_extraction_payload(
+        '{"facts": [], "entities": ['
+        '{"name": "Sarah", "relationship": "sister", "owner": "User", '
+        '"entity_type": "person", "aliases": ["sis"]}'
+        ']}'
+    )
+    assert entities[0].aliases == ["sis"]
 
 
 # ---------------------------------------------------------------------------

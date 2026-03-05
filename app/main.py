@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from asyncio import sleep
@@ -344,6 +345,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "chat_session_id": str(chat_session_id),
             "count": len(traces),
             "traces": traces,
+        }
+
+    @app.get(
+        "/v1/logs/{chat_session_id}",
+        responses={
+            404: {"model": ApiErrorResponse},
+            422: {"model": ApiErrorResponse},
+        },
+    )
+    def get_inference_logs(
+        chat_session_id: UUID,
+        tail: int = 50,
+    ) -> dict[str, object]:
+        from app.inference import LOGS_DIR
+
+        if LOGS_DIR is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Inference logging is disabled.",
+            )
+        log_path = LOGS_DIR / f"{chat_session_id}.jsonl"
+        if not log_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No inference logs for this session.",
+            )
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        tail_lines = lines[-tail:] if tail > 0 else lines
+        entries = []
+        for line in tail_lines:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return {
+            "chat_session_id": str(chat_session_id),
+            "count": len(entries),
+            "entries": entries,
         }
 
     @app.post(

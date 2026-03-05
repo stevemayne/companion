@@ -16,8 +16,8 @@ The system follows a **Modular Agentic Loop**. Instead of a direct User → LLM 
 
 1. **Orchestrator (The Brain):** Manages the state machine and routes data between modules.
 2. **Memory Controller:** The interface for Episodic (Logs), Semantic (Vectors), and Reflective (Graph) storage.
-3. **Extraction Agent:** A background process that distills each conversation turn into structured facts (subject/predicate/object triples stored in the vector DB) and entity mentions with relationship labels and aliases (stored as typed graph edges for alias-aware retrieval).
-4. **Reflector Agent:** An asynchronous job that periodically analyzes the "health" and "history" of the relationship to update the AI's internal monologue.
+3. **Extraction Agent:** A background process that distills each conversation turn into structured facts (stored in the vector DB for semantic retrieval) and entity mentions with relationship labels and aliases (stored as typed graph edges for alias-aware retrieval). Facts and entities serve different purposes and are stored separately — see R1 below.
+4. **Reflector Agent:** An asynchronous job that analyzes recent turns to update the companion's affect state (mood, trust, engagement, etc.) and the user's described physical state.
 5. **Inference Gateway:** A pluggable connector for Local (Ollama/LM Studio) or Cloud (Claude/OpenAI) models.
 
 ---
@@ -38,11 +38,15 @@ The system follows a **Modular Agentic Loop**. Instead of a direct User → LLM 
 
 ## 4. Functional Requirements & Responsibilities
 
-### R1: Memory Hierarchy
+### R1: Memory Hierarchy — Storage & Retrieval Philosophy
+
+Each memory layer has a distinct role. Facts and entities are separated by design:
 
 * **Episodic:** Stores the last 50 messages per session in raw text for immediate conversational flow.
-* **Semantic:** Stores structured facts extracted from each turn as (subject, predicate, object, text) triples. Retrieved via vector similarity at query time.
-* **Reflective (Graph):** Maps typed relationships and aliases. Entity relationships are stored as edges like `user -HAS_SISTER-> Sarah`. Nicknames and alternate names are stored as `Sarah -ALSO_KNOWN_AS-> sis`. At query time, alias resolution expands the entity set through `ALSO_KNOWN_AS` edges before fetching all relations, so mentioning "sis" in a later turn surfaces everything known about Sarah.
+* **Semantic (Vector Store):** Stores **facts** — natural language statements about the user and companion extracted from each turn (e.g. "User's sister Sarah started a new job", "Chloe loves cooking"). Retrieved via embedding similarity at query time. Facts are the system's primary knowledge store: they capture nuance, context, and detail that can be found through semantic search.
+* **Reflective (Graph):** Stores **entity relationships and aliases** — not facts. The graph answers structural questions ("who are the people in the user's life?", "what is Chloe working on?") that are hard to answer via vector similarity alone. Entity relationships are stored as typed edges like `User -HAS_SISTER-> Sarah` or `Chloe -HAS_RESEARCH_PROJECT-> polymer compounds`. Nicknames are stored as `Sarah -ALSO_KNOWN_AS-> sis`. At query time, alias resolution expands the entity set through `ALSO_KNOWN_AS` edges before fetching all relations, so mentioning "sis" in a later turn surfaces everything known about Sarah.
+
+**Why facts don't go in the graph:** Fact triples (subject/predicate/object) produce long sentence-fragment nodes that can't be traversed and duplicate the vector store. The graph should only contain short, reusable entity names connected by typed relationship edges. Entities cover people, pets, places, organizations, projects, and key concepts.
 
 ### R2: Pluggable Inference
 
@@ -75,13 +79,13 @@ When a user sends: *"I'm heading to Sarah's house for dinner, I'm pretty nervous
 
 ### 5.1 Pre-processing (Intent Analysis)
 
-The `IntentAnalyzer` classifies the message (LLM-based with heuristic fallback):
+The `IntentAnalyzer` classifies the message via LLM:
 
 * **Intent:** `status_update`
 * **Emotion:** `anxious`
 * **Entities:** `["Sarah"]`
 
-Implementation: `app/analysis.py` — `LLMIntentAnalyzer` sends the message to the analysis LLM, which returns structured JSON. On failure, `HeuristicIntentAnalyzer` uses keyword matching and capitalized-token extraction.
+Implementation: `app/analysis.py` — `LLMIntentAnalyzer` sends the message to the analysis LLM, which returns structured JSON.
 
 ### 5.2 Retrieval (Hybrid Search with Alias Resolution)
 
@@ -90,7 +94,7 @@ The `CognitiveOrchestrator` runs two retrieval paths in parallel:
 * **Vector Search:** Queries Qdrant for semantic similarity against `"Sarah"` and `"dinner"`. Returns stored facts like *"User's sister Sarah started a new job"*.
 * **Graph Walk (two-pass alias resolution):**
   1. **Pass 1 — Expand aliases:** For each entity, query for `ALSO_KNOWN_AS` edges. If `Sarah -ALSO_KNOWN_AS-> sis` exists, both `"Sarah"` and `"sis"` enter the expanded set.
-  2. **Pass 2 — Fetch relations:** Query all relations for the expanded entity set. Returns typed edges like `user -HAS_SISTER-> Sarah`, `user -MENTIONED_IN_SESSION-> Sarah`.
+  2. **Pass 2 — Fetch relations:** Query all relations for the expanded entity set. Returns typed edges like `User -HAS_SISTER-> Sarah`.
 
 This means if the user previously said *"my sister Sarah, we call her sis"*, mentioning just *"sis"* in a later message will resolve to Sarah and surface all her relationships.
 
@@ -122,10 +126,11 @@ The response passes through `_enforce_seeded_identity()` to ensure the companion
 
 ### 5.5 Synchronous Post-processing
 
-Immediately after inference, the orchestrator writes to the graph and updates the monologue:
+Immediately after inference, the orchestrator updates the monologue:
 
-* **Graph writes:** `user -MENTIONED_IN_SESSION-> Sarah` (entities from both LLM analysis and a heuristic safety net that extracts capitalized tokens).
 * **Monologue update:** `"Focus on a anxious user; intent=status_update; entities=Sarah"`
+
+Graph writes and affect updates happen asynchronously in the background agents (see 5.6).
 
 Implementation: `app/services.py` — `CognitiveOrchestrator._postprocess()`
 
@@ -133,19 +138,19 @@ Implementation: `app/services.py` — `CognitiveOrchestrator._postprocess()`
 
 The `BackgroundAgentDispatcher` fires two jobs on a thread pool:
 
-**Extraction Agent** — Extracts structured facts and entities from the turn using an LLM (with heuristic fallback):
+**Extraction Agent** — Extracts structured facts and entities from the turn using an LLM:
 
-* **Structured facts** as (subject, predicate, object, text) triples:
+* **Facts** — natural language statements stored in the **vector store** for semantic retrieval:
   * `{subject: "User", predicate: "is heading to", object: "Sarah's house for dinner", text: "User is heading to Sarah's house for dinner"}`
-* **Entity mentions** with relationships and aliases:
-  * `{name: "Sarah", relationship: "sister", aliases: ["sis"]}`
-* Facts are stored in the **vector store** (Qdrant) for semantic retrieval.
-* Entity relationships become **typed graph edges**: `user -HAS_SISTER-> Sarah`
-* Aliases become **graph edges**: `Sarah -ALSO_KNOWN_AS-> sis`
+* **Entities** — people, places, organizations, projects, and concepts stored as **graph edges**:
+  * `{name: "Sarah", relationship: "sister", owner: "User", entity_type: "person", aliases: ["sis"]}`
+  * Becomes: `User -HAS_SISTER-> Sarah` and `Sarah -ALSO_KNOWN_AS-> sis`
 
-Implementation: `app/analysis.py` — `LLMFactExtractor` / `HeuristicFactExtractor`, `app/agents.py` — `BackgroundAgentDispatcher._run_extraction()`
+Facts and entities are stored separately by design (see R1 above).
 
-**Reflector Agent** — Summarizes the last 3 turns and appends to the internal monologue for next-turn context.
+Implementation: `app/analysis.py` — `LLMFactExtractor`, `app/agents.py` — `BackgroundAgentDispatcher._run_extraction()`
+
+**Reflector Agent** — Analyzes the last 3 turns to update the companion's affect state (mood, trust, engagement, shyness, etc.) and the user's described physical state. Both are persisted in the monologue store and injected into the system prompt on the next turn.
 
 Implementation: `app/agents.py` — `BackgroundAgentDispatcher._run_reflector()`
 
@@ -185,7 +190,7 @@ User Message
 │                 ▼                   │
 │  ┌──────────────────────────────┐   │
 │  │    Post-process (sync)       │   │
-│  │  graph writes + monologue    │   │
+│  │  monologue update            │   │
 │  └──────────────────────────────┘   │
 └────────────────┬────────────────────┘
                  │
@@ -196,8 +201,8 @@ User Message
 │  Agent   │          │   Agent    │
 │ (async)  │          │  (async)   │
 │          │          │            │
-│ facts ──▶│Vector   │ monologue  │
-│ entities▶│ Graph    │ update     │
+│ facts ──▶ Vector    │ affect +   │
+│entities ▶ Graph     │ user_state │
 └──────────┘          └────────────┘
 ```
 

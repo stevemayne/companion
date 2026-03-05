@@ -178,35 +178,26 @@ class BackgroundAgentDispatcher:
                         importance=fact.importance,
                     )
                 )
-                if fact.subject and fact.object and fact.relation_type:
-                    self._graph_store.upsert_relation(
-                        GraphRelation(
-                            chat_session_id=chat_session_id,
-                            source=fact.subject,
-                            relation=fact.relation_type,
-                            target=fact.object,
-                        )
-                    )
 
             for em in outcome.entities:
                 if em.relationship:
                     self._graph_store.upsert_relation(
                         GraphRelation(
                             chat_session_id=chat_session_id,
-                            source="user",
+                            source=em.owner,
                             relation=f"HAS_{em.relationship.upper().replace(' ', '_')}",
                             target=em.name,
                         )
                     )
-                for alias in em.aliases:
-                    self._graph_store.upsert_relation(
-                        GraphRelation(
-                            chat_session_id=chat_session_id,
-                            source=em.name,
-                            relation="ALSO_KNOWN_AS",
-                            target=alias,
+                    for alias in em.aliases:
+                        self._graph_store.upsert_relation(
+                            GraphRelation(
+                                chat_session_id=chat_session_id,
+                                source=em.name,
+                                relation="ALSO_KNOWN_AS",
+                                target=alias,
+                            )
                         )
-                    )
 
             for fact in outcome.companion_facts:
                 self._vector_store.upsert_memory(
@@ -217,15 +208,6 @@ class BackgroundAgentDispatcher:
                         importance=fact.importance,
                     )
                 )
-                if fact.subject and fact.object and fact.relation_type:
-                    self._graph_store.upsert_relation(
-                        GraphRelation(
-                            chat_session_id=chat_session_id,
-                            source=fact.subject,
-                            relation=fact.relation_type,
-                            target=fact.object,
-                        )
-                    )
 
             trace = build_trace_base(chat_session_id=chat_session_id)
             trace.update({
@@ -244,7 +226,11 @@ class BackgroundAgentDispatcher:
                     for f in outcome.facts
                 ],
                 "entities": [
-                    {"name": e.name, "relationship": e.relationship, "aliases": e.aliases}
+                    {
+                        "name": e.name, "relationship": e.relationship,
+                        "owner": e.owner, "entity_type": e.entity_type,
+                        "aliases": e.aliases,
+                    }
                     for e in outcome.entities
                 ],
                 "companion_facts": [f.text for f in outcome.companion_facts],

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     inference_temperature: float = 0.75
     inference_frequency_penalty: float = 0.4
     inference_presence_penalty: float = 0.3
-    inference_max_tokens: int = 512
+    inference_max_tokens: int = 1024
     inference_failover_enabled: bool = False
     fallback_inference_model: str | None = None
     fallback_inference_base_url: str | None = None
