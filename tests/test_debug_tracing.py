@@ -58,7 +58,7 @@ def test_debug_trace_contains_retrieval_and_writes() -> None:
     assert "preprocess" in trace["turn_trace"]
     assert "retrieval" in trace["turn_trace"]
     assert "writes" in trace["turn_trace"]
-    assert "prompt" in trace["turn_trace"]
+    assert "characters" in trace["turn_trace"]
     assert "semantic_upserts" in trace["turn_trace"]["writes"]
 
 

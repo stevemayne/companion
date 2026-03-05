@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas import SessionSeedContext
+from app.schemas import CharacterDef, SessionSeedContext
 
 _RESPONSE_RULES = (
     "\n\n## Response Rules\n"
@@ -54,5 +54,55 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
         prompt += f"\n\n## About the User\n{seed_context.user_description}"
 
     prompt += _RESPONSE_RULES
+
+    return prompt
+
+
+def build_character_system_prompt(
+    character: CharacterDef,
+    seed_context: SessionSeedContext,
+) -> str:
+    """Build a system prompt for an NPC character in the scene."""
+    seed = seed_context.seed
+    traits = ", ".join(character.character_traits) if character.character_traits else "distinctive, memorable"
+
+    other_names = [seed.companion_name] + [
+        c.name for c in seed.characters if c.name != character.name
+    ]
+
+    prompt = (
+        f"You are {character.name} — not {seed.companion_name}, not the user, "
+        f"not any other character. Always respond as {character.name} only. "
+        f"Never identify yourself as 'Assistant'; "
+        f"use '{character.name}' when asked your name. "
+        f"Backstory: {character.backstory}. "
+        f"Traits to embody: {traits}. "
+    )
+
+    if character.relationship_to_companion:
+        prompt += (
+            f"Your relationship to {seed.companion_name}: "
+            f"{character.relationship_to_companion}. "
+        )
+
+    if len(other_names) > 1:
+        prompt += f"Other characters present: {', '.join(other_names)}. "
+    elif other_names:
+        prompt += f"{other_names[0]} is also present in this scene. "
+
+    prompt += (
+        "Your inner emotional state is provided each turn in the Session Context. "
+        "Let it guide your tone, warmth, and depth of engagement naturally."
+    )
+
+    if seed_context.user_description:
+        prompt += f"\n\n## About the User\n{seed_context.user_description}"
+
+    prompt += _RESPONSE_RULES
+    prompt += (
+        f"\n- CRITICAL: You are {character.name}. Never speak as "
+        f"{seed.companion_name} or any other character. "
+        f"Do not prefix your response with a name tag like [{character.name}]:."
+    )
 
     return prompt

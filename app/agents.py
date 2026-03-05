@@ -128,7 +128,7 @@ class BackgroundAgentDispatcher:
             assistant_message,
             companion_name,
         )
-        self._submit(self._run_reflector, chat_session_id)
+        self._submit(self._run_reflector, chat_session_id, companion_name)
 
         if self._consolidation_agent is not None:
             with self._lock:
@@ -241,10 +241,11 @@ class BackgroundAgentDispatcher:
         except Exception:
             self._increment(chat_session_id=chat_session_id, failures=1)
 
-    def _run_reflector(self, chat_session_id: UUID) -> None:
+    def _run_reflector(self, chat_session_id: UUID, companion_name: str | None = None) -> None:
         try:
             current = self._monologue_store.get(
                 chat_session_id=chat_session_id,
+                character_name=companion_name,
             )
             current_affect = (
                 current.affect if current is not None else CompanionAffect()
@@ -277,6 +278,7 @@ class BackgroundAgentDispatcher:
             self._monologue_store.upsert(
                 MonologueState(
                     chat_session_id=chat_session_id,
+                    character_name=companion_name,
                     internal_monologue=current_monologue,
                     affect=refined_affect,
                     user_state=refined_user_state,

@@ -267,25 +267,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise
 
         async def event_generator() -> AsyncIterator[str]:
+            all_messages = chat_result.assistant_messages or [chat_result.assistant_message]
             yield sse_event(
                 "start",
                 {
                     "chat_session_id": str(chat_result.chat_session_id),
-                    "message_id": str(chat_result.assistant_message.message_id),
+                    "message_id": str(all_messages[0].message_id),
                     "request_id": request_id,
                     "seed_version": chat_result.seed_version,
                     "idempotency_replay": chat_result.idempotency_replay,
                 },
             )
-            chunks = re.findall(r"\S+\s*", chat_result.assistant_message.content)
-            for chunk in chunks:
-                yield sse_event("delta", {"chunk": chunk})
-                await sleep(0.01)
+            for msg in all_messages:
+                yield sse_event(
+                    "char_start",
+                    {"name": msg.name or "", "message_id": str(msg.message_id)},
+                )
+                chunks = re.findall(r"\S+\s*", msg.content)
+                for chunk in chunks:
+                    yield sse_event("delta", {"chunk": chunk, "name": msg.name or ""})
+                    await sleep(0.01)
+                yield sse_event(
+                    "char_done",
+                    {"name": msg.name or "", "message_id": str(msg.message_id)},
+                )
             yield sse_event(
                 "done",
                 {
                     "chat_session_id": str(chat_result.chat_session_id),
-                    "message_id": str(chat_result.assistant_message.message_id),
+                    "message_ids": [str(m.message_id) for m in all_messages],
+                    "characters": chat_result.characters,
                 },
             )
 

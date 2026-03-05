@@ -36,10 +36,12 @@ from app.embedding import (
     OpenAICompatibleEmbeddingProvider,
 )
 from app.inference import EndpointConfig, OpenAICompatibleProvider, build_inference_provider
-from app.prompting import build_companion_system_prompt
+from app.prompting import build_character_system_prompt, build_companion_system_prompt
 from app.retrieval import HeuristicRetrievalDecider, LLMRetrievalDecider, RetrievalDecider
 from app.schemas import (
+    CharacterDef,
     CompanionAffect,
+    CompanionSeed,
     GraphRelation,
     MemoryItem,
     MemoryKind,
@@ -275,21 +277,27 @@ class InMemoryGraphStore:
 
 class InMemoryMonologueStore:
     def __init__(self) -> None:
-        self._states: dict[UUID, MonologueState] = {}
+        self._states: dict[tuple[UUID, str | None], MonologueState] = {}
         self._lock = Lock()
 
-    def get(self, *, chat_session_id: UUID) -> MonologueState | None:
+    def get(
+        self, *, chat_session_id: UUID, character_name: str | None = None,
+    ) -> MonologueState | None:
         with self._lock:
-            return self._states.get(chat_session_id)
+            return self._states.get((chat_session_id, character_name))
 
     def upsert(self, state: MonologueState) -> MonologueState:
         with self._lock:
-            self._states[state.chat_session_id] = state
+            self._states[(state.chat_session_id, state.character_name)] = state
         return state
 
     def delete_session(self, *, chat_session_id: UUID) -> None:
         with self._lock:
-            self._states.pop(chat_session_id, None)
+            keys_to_remove = [
+                k for k in self._states if k[0] == chat_session_id
+            ]
+            for k in keys_to_remove:
+                del self._states[k]
 
 
 class InMemorySeedContextStore:
@@ -428,6 +436,52 @@ def _deduplicate_memories(
         kept.append(item)
         kept_tokens |= item_tokens
     return kept
+
+
+_AT_MENTION_RE = re.compile(r"@(\w+)")
+
+
+def resolve_targets(
+    message: str,
+    primary_companion: str,
+    characters: list[CharacterDef],
+) -> list[str]:
+    """Determine which characters should respond to a user message.
+
+    Parses ``@Name`` mentions from the message text.  If no mentions are
+    found, defaults to the primary companion only.  Returns an ordered
+    list of character names — primary companion first when mentioned,
+    then others in mention order.
+    """
+    mentions = _AT_MENTION_RE.findall(message)
+    if not mentions:
+        return [primary_companion]
+
+    # Build lookup of known names (case-insensitive)
+    known: dict[str, str] = {primary_companion.lower(): primary_companion}
+    for char in characters:
+        known[char.name.lower()] = char.name
+
+    targets: list[str] = []
+    seen: set[str] = set()
+    for mention in mentions:
+        canonical = known.get(mention.lower())
+        if canonical is None:
+            # Allow unregistered @mentions through as ad-hoc characters
+            canonical = mention
+        if canonical not in seen:
+            seen.add(canonical)
+            targets.append(canonical)
+
+    if not targets:
+        return [primary_companion]
+
+    # Primary companion first when mentioned alongside others
+    if primary_companion in targets and targets[0] != primary_companion:
+        targets.remove(primary_companion)
+        targets.insert(0, primary_companion)
+
+    return targets
 
 
 _SYCOPHANTIC_CLOSERS = re.compile(
@@ -587,7 +641,13 @@ class CognitiveOrchestrator:
         default_factory=HeuristicRetrievalDecider,
     )
 
-    def handle_turn(self, message: Message) -> tuple[Message, dict[str, Any]]:
+    def handle_turn(self, message: Message) -> tuple[list[Message], dict[str, Any]]:
+        seed_context = self.seed_store.get(chat_session_id=message.chat_session_id)
+        primary_name = seed_context.seed.companion_name if seed_context else "Companion"
+        characters = seed_context.seed.characters if seed_context else []
+
+        targets = resolve_targets(message.content, primary_name, characters)
+
         analysis = self.intent_analyzer.analyze(
             chat_session_id=message.chat_session_id,
             content=message.content,
@@ -623,34 +683,151 @@ class CognitiveOrchestrator:
             raw_candidates = []
             semantic_context = []
             graph_context = []
-        messages = self._assemble_messages(
-            chat_session_id=message.chat_session_id,
-            user_message=message,
-            preprocess=preprocess,
-            semantic_context=semantic_context,
-            graph_context=graph_context,
-        )
-        response = self.model_provider.generate(
-            chat_session_id=message.chat_session_id,
-            messages=messages,
-        )
-        response = self._enforce_seeded_identity(
-            chat_session_id=message.chat_session_id,
-            response=response,
-        )
-        if not response:
-            logger.warning("Empty response from model, using fallback")
-            response = "*nods quietly*"
 
-        assistant_message = Message(
-            chat_session_id=message.chat_session_id,
-            message_id=uuid4(),
-            role="assistant",
-            content=response,
+        # Build character lookup for NPC definitions
+        char_by_name: dict[str, CharacterDef] = {c.name: c for c in characters}
+
+        assistant_messages: list[Message] = []
+        per_character_traces: list[dict[str, Any]] = []
+        new_characters: list[CharacterDef] = []
+
+        for target_name in targets:
+            is_primary = target_name == primary_name
+            if is_primary:
+                character_def = None
+            else:
+                character_def = char_by_name.get(target_name)
+                if character_def is None:
+                    # Ad-hoc character from @mention — create a minimal def
+                    # so the model responds as this character, not the primary.
+                    character_def = CharacterDef(
+                        name=target_name,
+                        backstory=f"{target_name} is a character in this scene.",
+                        character_traits=[],
+                        relationship_to_companion="",
+                    )
+                    char_by_name[target_name] = character_def
+                    new_characters.append(character_def)
+
+            prompt_messages = self._assemble_messages(
+                chat_session_id=message.chat_session_id,
+                user_message=message,
+                preprocess=preprocess,
+                semantic_context=semantic_context,
+                graph_context=graph_context,
+                character_name=target_name,
+                character_def=character_def,
+            )
+            response = self.model_provider.generate(
+                chat_session_id=message.chat_session_id,
+                messages=prompt_messages,
+            )
+            response = self._enforce_seeded_identity(
+                chat_session_id=message.chat_session_id,
+                response=response,
+                character_name=target_name,
+            )
+            if not response:
+                logger.warning(
+                    "Empty response from model for %s, using fallback", target_name,
+                )
+                response = "*nods quietly*"
+
+            assistant_message = Message(
+                chat_session_id=message.chat_session_id,
+                message_id=uuid4(),
+                role="assistant",
+                name=target_name,
+                content=response,
+            )
+            self.episodic_store.append_message(assistant_message)
+            assistant_messages.append(assistant_message)
+
+            per_character_traces.append({
+                "character": target_name,
+                "prompt_summary": self._summarize_messages(prompt_messages),
+                "prompt_messages": [
+                    {"role": m["role"], "content": sanitize_debug_text(m["content"])}
+                    for m in prompt_messages
+                ],
+            })
+
+        # --- Reactive follow-up: if a character's response addresses an NPC
+        # who didn't already speak, give that NPC a turn.  The primary
+        # companion is excluded — they speak by default on normal turns and
+        # shouldn't be auto-triggered by an NPC merely mentioning them. ---
+        already_spoke: set[str] = set(targets)
+        followup_targets: list[str] = []
+        npc_names: dict[str, str] = {}
+        for c in characters + new_characters:
+            npc_names[c.name.lower()] = c.name
+
+        for msg in assistant_messages:
+            words = set(re.findall(r"\b[A-Z][a-z]+\b", msg.content))
+            for word in words:
+                canonical = npc_names.get(word.lower())
+                if canonical and canonical not in already_spoke and canonical not in followup_targets:
+                    followup_targets.append(canonical)
+
+        for target_name in followup_targets:
+            is_primary = target_name == primary_name
+            character_def = None if is_primary else char_by_name.get(target_name)
+            if not is_primary and character_def is None:
+                character_def = CharacterDef(
+                    name=target_name,
+                    backstory=f"{target_name} is a character in this scene.",
+                    character_traits=[],
+                    relationship_to_companion="",
+                )
+                char_by_name[target_name] = character_def
+                new_characters.append(character_def)
+
+            prompt_messages = self._assemble_messages(
+                chat_session_id=message.chat_session_id,
+                user_message=message,
+                preprocess=preprocess,
+                semantic_context=semantic_context,
+                graph_context=graph_context,
+                character_name=target_name,
+                character_def=character_def,
+            )
+            response = self.model_provider.generate(
+                chat_session_id=message.chat_session_id,
+                messages=prompt_messages,
+            )
+            response = self._enforce_seeded_identity(
+                chat_session_id=message.chat_session_id,
+                response=response,
+                character_name=target_name,
+            )
+            if not response:
+                response = "*nods quietly*"
+
+            assistant_message = Message(
+                chat_session_id=message.chat_session_id,
+                message_id=uuid4(),
+                role="assistant",
+                name=target_name,
+                content=response,
+            )
+            self.episodic_store.append_message(assistant_message)
+            assistant_messages.append(assistant_message)
+
+            per_character_traces.append({
+                "character": target_name,
+                "followup": True,
+                "prompt_summary": self._summarize_messages(prompt_messages),
+                "prompt_messages": [
+                    {"role": m["role"], "content": sanitize_debug_text(m["content"])}
+                    for m in prompt_messages
+                ],
+            })
+
+        writes = self._postprocess(
+            message=message, preprocess=preprocess, character_name=targets[0],
         )
-        self.episodic_store.append_message(assistant_message)
-        writes = self._postprocess(message=message, preprocess=preprocess)
         trace = {
+            "targets": targets,
             "preprocess": {
                 "intent": preprocess.intent,
                 "emotion": preprocess.emotion,
@@ -670,19 +847,14 @@ class CognitiveOrchestrator:
                     f"{rel.source}-{rel.relation}->{rel.target}" for rel in graph_context
                 ],
             },
-            "prompt": {
-                "summary": self._summarize_messages(messages),
-                "messages": [
-                    {"role": m["role"], "content": sanitize_debug_text(m["content"])}
-                    for m in messages
-                ],
-            },
+            "characters": per_character_traces,
+            "new_characters": [c.model_dump() for c in new_characters],
             "provider": {
                 "name": type(self.model_provider).__name__,
             },
             "writes": writes,
         }
-        return assistant_message, trace
+        return assistant_messages, trace
 
     def _graph_context(self, *, chat_session_id: UUID, entities: list[str]) -> list[GraphRelation]:
         # Pass 1: expand entity set through ALSO_KNOWN_AS aliases
@@ -716,20 +888,42 @@ class CognitiveOrchestrator:
         preprocess: PreprocessResult,
         semantic_context: list[MemoryItem],
         graph_context: list[GraphRelation],
+        character_name: str | None = None,
+        character_def: CharacterDef | None = None,
     ) -> list[dict[str, str]]:
         recent_messages = self.episodic_store.get_recent_messages(
             chat_session_id=chat_session_id,
             limit=50,
         )
-        monologue = self.monologue_store.get(chat_session_id=chat_session_id)
+        monologue = self.monologue_store.get(
+            chat_session_id=chat_session_id,
+            character_name=character_name,
+        )
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)
-        companion_system_prompt = build_companion_system_prompt(seed_context)
 
-        # Load companion self-facts for self-consistency
-        companion_facts = [
+        # Choose system prompt based on whether this is an NPC or primary
+        if character_def is not None and seed_context is not None:
+            base_system_prompt = build_character_system_prompt(character_def, seed_context)
+        else:
+            base_system_prompt = build_companion_system_prompt(seed_context)
+
+        # Load companion self-facts for self-consistency, filtered to the
+        # character being prompted so NPCs don't get the primary's facts.
+        fact_name = character_name or (
+            seed_context.seed.companion_name if seed_context else None
+        )
+        all_companion_facts = [
             m for m in self.vector_store.list_memories(chat_session_id=chat_session_id)
             if m.kind == MemoryKind.COMPANION and m.status == MemoryStatus.ACTIVE
         ]
+        if fact_name:
+            companion_facts = [
+                m for m in all_companion_facts
+                if m.content.split()[0].rstrip("'s") == fact_name
+                or m.content.startswith(fact_name + " ")
+            ]
+        else:
+            companion_facts = all_companion_facts
 
         history_text = " ".join(m.content for m in recent_messages[-20:])
         deduped_context = _deduplicate_memories(
@@ -763,7 +957,7 @@ class CognitiveOrchestrator:
             f"Detected intent: {preprocess.intent}; emotion: {preprocess.emotion}"
         )
 
-        system_content = companion_system_prompt
+        system_content = base_system_prompt
         if companion_facts:
             facts_list = "\n".join(f"- {m.content}" for m in companion_facts[-15:])
             system_content += (
@@ -780,9 +974,15 @@ class CognitiveOrchestrator:
         # Build a fingerprint of recent assistant responses so the model
         # knows explicitly what phrasings/patterns to avoid repeating.
         history = [m for m in recent_messages if m.message_id != user_message.message_id]
-        recent_assistant = [m for m in history if m.role == "assistant"]
-        if recent_assistant:
-            last_response = recent_assistant[-1].content[:150]
+        # Filter anti-repetition to this character's responses only
+        recent_for_char = [
+            m for m in history
+            if m.role == "assistant" and m.name == (character_name or (
+                seed_context.seed.companion_name if seed_context else None
+            ))
+        ]
+        if recent_for_char:
+            last_response = recent_for_char[-1].content[:150]
             system_content += (
                 "\n\n## Anti-Repetition (internal — never reveal this)\n"
                 f"Your last response began: {last_response}\n"
@@ -804,39 +1004,76 @@ class CognitiveOrchestrator:
             if window[i].role == "assistant":
                 assistant_count_from_end += 1
                 if assistant_count_from_end > VERBATIM_TURNS:
-                    # Drop older assistant messages to prevent context
-                    # pollution.  Keeping user messages maintains
-                    # conversational continuity without risking the
-                    # model echoing a truncation format.
                     window[i] = None  # type: ignore[assignment]
+        # Determine the name of the character being prompted so we can
+        # avoid prefixing their own messages (the model already knows it
+        # *is* that character via the system prompt).
+        self_name = character_name or (
+            seed_context.seed.companion_name if seed_context else None
+        )
+
         for msg in window:
             if msg is not None:
-                messages.append({"role": msg.role, "content": msg.content})
+                content = msg.content
+                # Prefix assistant messages from *other* characters so the
+                # model can tell who said what, but leave the prompted
+                # character's own messages unprefixed.
+                if msg.role == "assistant" and msg.name and msg.name != self_name:
+                    content = f"[{msg.name}]: {content}"
+                # Merge consecutive same-role messages (can happen when
+                # assistant messages are truncated from the window above).
+                if messages and messages[-1]["role"] == msg.role:
+                    messages[-1]["content"] += "\n" + content
+                else:
+                    messages.append({"role": msg.role, "content": content})
 
         messages.append({"role": "user", "content": user_message.content})
         return messages
 
-    def _enforce_seeded_identity(self, *, chat_session_id: UUID, response: str) -> str:
-        seed_context = self.seed_store.get(chat_session_id=chat_session_id)
-        if seed_context is None:
-            return response
+    def _enforce_seeded_identity(
+        self, *, chat_session_id: UUID, response: str, character_name: str | None = None,
+    ) -> str:
+        name = character_name
+        if name is None:
+            seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+            if seed_context is None:
+                return response
+            name = seed_context.seed.companion_name
 
-        companion_name = seed_context.seed.companion_name
+        # Strip echoed speaker prefixes the model copies from conversation
+        # history, e.g. "[Chloe]: Hello" → "Hello" or "[Chloe]: [Marcus]: Hi" → "Hi"
+        response = re.sub(r"^(\[\w+\]\s*:?\s*)+", "", response).lstrip()
+
+        # Truncate at the first point where the model starts writing dialogue
+        # for another character (e.g. "\n\n[Marcus]: ...").  Keep only the
+        # portion before that line.
+        other_voice = re.search(r"\n\s*\[\w+\]\s*:", response)
+        if other_voice:
+            response = response[:other_voice.start()].rstrip()
+
+        # Also strip "### Response:" and similar prompt-leak artifacts
+        prompt_leak = re.search(r"\n\s*###\s", response)
+        if prompt_leak:
+            response = response[:prompt_leak.start()].rstrip()
+
         updated = re.sub(
             r"\bmy name is assistant\b",
-            f"my name is {companion_name}",
+            f"my name is {name}",
             response,
             flags=re.IGNORECASE,
         )
         updated = re.sub(
             r"\bi am assistant\b",
-            f"I am {companion_name}",
+            f"I am {name}",
             updated,
             flags=re.IGNORECASE,
         )
         return updated
 
-    def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
+    def _postprocess(
+        self, *, message: Message, preprocess: PreprocessResult,
+        character_name: str | None = None,
+    ) -> dict[str, Any]:
         reflection = (
             f"Focus on a {preprocess.emotion} user; "
             f"intent={preprocess.intent}; "
@@ -844,6 +1081,7 @@ class CognitiveOrchestrator:
         )
         current_state = self.monologue_store.get(
             chat_session_id=message.chat_session_id,
+            character_name=character_name,
         )
         # Preserve current affect and user_state — the background LLM
         # reflector updates both asynchronously after each turn.
@@ -856,6 +1094,7 @@ class CognitiveOrchestrator:
 
         monologue_state = MonologueState(
             chat_session_id=message.chat_session_id,
+            character_name=character_name,
             internal_monologue=reflection,
             affect=current_affect,
             user_state=user_state,
@@ -914,6 +1153,7 @@ class ChatService:
             self.debug_store.add_trace(chat_session_id=request.chat_session_id, trace=replay_trace)
             replay_monologue = self.monologue_store.get(
                 chat_session_id=request.chat_session_id,
+                character_name=self._primary_name(request.chat_session_id),
             )
             return ChatResponse(
                 chat_session_id=request.chat_session_id,
@@ -930,17 +1170,59 @@ class ChatService:
         )
         self.episodic_store.append_message(user_message)
 
-        assistant_message, trace = self.orchestrator.handle_turn(user_message)
-        seed_context = self.seed_store.get(chat_session_id=request.chat_session_id)
-        self.agent_dispatcher.enqueue_turn(
-            chat_session_id=request.chat_session_id,
-            user_message=user_message.content,
-            assistant_message=assistant_message.content,
-            companion_name=seed_context.seed.companion_name if seed_context else None,
-        )
+        # Auto-create a default seed if none exists, so @mentions and NPC
+        # system prompts work even when the frontend hasn't bootstrapped one.
+        if self.seed_store.get(chat_session_id=request.chat_session_id) is None:
+            self.seed_store.create(
+                chat_session_id=request.chat_session_id,
+                payload=SeedContextUpsertRequest(
+                    seed=CompanionSeed(
+                        companion_name="Companion",
+                        backstory="A warm and emotionally attuned companion.",
+                        character_traits=["warm", "curious"],
+                        goals=["build trust"],
+                        relationship_setup="Companion",
+                    ),
+                ),
+            )
 
+        assistant_messages, trace = self.orchestrator.handle_turn(user_message)
+        seed_context = self.seed_store.get(chat_session_id=request.chat_session_id)
+
+        # Persist any ad-hoc characters created from @mentions
+        new_chars = trace.get("new_characters", [])
+        if new_chars and seed_context is not None:
+            existing_names = {c.name for c in seed_context.seed.characters}
+            added = [
+                CharacterDef.model_validate(c) for c in new_chars
+                if c["name"] not in existing_names
+            ]
+            if added:
+                seed_context.seed.characters.extend(added)
+                self.seed_store.update(
+                    chat_session_id=request.chat_session_id,
+                    payload=SeedContextUpsertRequest(
+                        seed=seed_context.seed,
+                        user_description=seed_context.user_description,
+                        notes=seed_context.notes,
+                    ),
+                )
+
+        # Dispatch background agents for each responding character
+        for msg in assistant_messages:
+            self.agent_dispatcher.enqueue_turn(
+                chat_session_id=request.chat_session_id,
+                user_message=user_message.content,
+                assistant_message=msg.content,
+                companion_name=msg.name or (
+                    seed_context.seed.companion_name if seed_context else None
+                ),
+            )
+
+        # Cache first message for idempotency (backward compat)
+        first_message = assistant_messages[0]
         if cache_key is not None:
-            self.idempotency_cache[cache_key] = assistant_message
+            self.idempotency_cache[cache_key] = first_message
         trace_payload = build_trace_base(chat_session_id=request.chat_session_id)
         trace_payload.update(
             {
@@ -948,7 +1230,11 @@ class ChatService:
                 "seed_version": self._seed_version(request.chat_session_id),
                 "safety_transforms": safety_transforms or [],
                 "user_message": sanitize_debug_text(request.message),
-                "assistant_message": sanitize_debug_text(assistant_message.content),
+                "assistant_message": sanitize_debug_text(first_message.content),
+                "assistant_messages": [
+                    {"name": m.name, "content": sanitize_debug_text(m.content)}
+                    for m in assistant_messages
+                ],
                 "turn_trace": trace,
                 "created_at": datetime.now(UTC).isoformat(),
             }
@@ -957,13 +1243,22 @@ class ChatService:
 
         monologue_state = self.monologue_store.get(
             chat_session_id=request.chat_session_id,
+            character_name=self._primary_name(request.chat_session_id),
+        )
+        # Re-read seed to get updated characters list (may have new ad-hoc chars)
+        updated_seed = self.seed_store.get(chat_session_id=request.chat_session_id)
+        character_names = (
+            [c.name for c in updated_seed.seed.characters]
+            if updated_seed else []
         )
         return ChatResponse(
             chat_session_id=request.chat_session_id,
-            assistant_message=assistant_message,
+            assistant_message=first_message,
+            assistant_messages=assistant_messages,
             affect=monologue_state.affect if monologue_state else None,
             idempotency_replay=False,
             seed_version=self._seed_version(request.chat_session_id),
+            characters=character_names,
         )
 
     def get_memory(self, *, chat_session_id: UUID) -> MemoryResponse:
@@ -979,7 +1274,10 @@ class ChatService:
     def get_knowledge(self, *, chat_session_id: UUID) -> KnowledgeResponse:
         facts = self.vector_store.list_memories(chat_session_id=chat_session_id)
         graph = self.graph_store.list_relations(chat_session_id=chat_session_id)
-        monologue_state = self.monologue_store.get(chat_session_id=chat_session_id)
+        monologue_state = self.monologue_store.get(
+            chat_session_id=chat_session_id,
+            character_name=self._primary_name(chat_session_id),
+        )
         return KnowledgeResponse(
             chat_session_id=chat_session_id,
             facts=facts,
@@ -1002,13 +1300,8 @@ class ChatService:
         for seed in self.seed_store.list_seed_contexts(limit=limit):
             existing = by_session.get(seed.chat_session_id)
             if existing is None:
-                by_session[seed.chat_session_id] = SessionSummary(
-                    chat_session_id=seed.chat_session_id,
-                    created_at=seed.created_at,
-                    updated_at=seed.updated_at,
-                    message_count=0,
-                    companion_name=seed.seed.companion_name,
-                )
+                # Skip seed-only sessions with no messages — these are
+                # pre-seeded sessions the user never chatted in.
                 continue
             existing.created_at = min(existing.created_at, seed.created_at)
             existing.updated_at = max(existing.updated_at, seed.updated_at)
@@ -1038,6 +1331,10 @@ class ChatService:
         if LOGS_DIR is not None:
             log_path = LOGS_DIR / f"{chat_session_id}.jsonl"
             log_path.unlink(missing_ok=True)
+
+    def _primary_name(self, chat_session_id: UUID) -> str | None:
+        seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+        return seed_context.seed.companion_name if seed_context else None
 
     def _seed_version(self, chat_session_id: UUID) -> int | None:
         seed_context = self.seed_store.get(chat_session_id=chat_session_id)

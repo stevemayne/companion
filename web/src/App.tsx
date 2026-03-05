@@ -9,12 +9,13 @@ import { KnowledgePanel } from "./KnowledgePanel";
 import { fetchInferenceLogs, InferenceLogEntry } from "./logsApi";
 import { InferenceLogPanel } from "./InferenceLogPanel";
 import { fetchMemory } from "./memoryApi";
-import { SeedPayload, upsertSeed } from "./seedApi";
+import { CharacterDef, SeedPayload, upsertSeed } from "./seedApi";
 import { fetchSessions, SessionSummary } from "./sessionApi";
 import { DebugTrace } from "./debugTypes";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
+  name?: string;
   content: string;
 };
 
@@ -68,11 +69,19 @@ function toPayload(draft: SeedDraft): { seed: SeedPayload; user_description?: st
       backstory: draft.backstory.trim() || DEFAULT_SEED.backstory,
       character_traits: splitList(draft.character_traits),
       goals: splitList(draft.goals),
-      relationship_setup: draft.relationship_setup.trim() || DEFAULT_SEED.relationship_setup
+      relationship_setup: draft.relationship_setup.trim() || DEFAULT_SEED.relationship_setup,
+      characters: []
     },
     user_description: userDesc || undefined,
     notes: draft.notes.trim()
   };
+}
+
+/** Find the @mention query at the cursor position, or null if not in a mention. */
+function getActiveMention(text: string, cursorPos: number): string | null {
+  const before = text.slice(0, cursorPos);
+  const match = /@(\w*)$/.exec(before);
+  return match ? match[1] : null;
 }
 
 function loadSeedDraft(): SeedDraft {
@@ -120,11 +129,13 @@ export function App() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pendingAssistant, setPendingAssistant] = useState("");
+  const [pendingCharName, setPendingCharName] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState("idle");
 
   const [seedStatus, setSeedStatus] = useState("not seeded");
   const [seedDraft, setSeedDraft] = useState<SeedDraft>(() => loadSeedDraft());
+  const [characters, setCharacters] = useState<CharacterDef[]>([]);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("sessions");
@@ -146,10 +157,14 @@ export function App() {
   const [knowledgeMonologue, setKnowledgeMonologue] = useState<string | null>(null);
   const [knowledgeAffect, setKnowledgeAffect] = useState<CompanionAffect | null>(null);
 
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const currentSessionRef = useRef(sessionId);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     currentSessionRef.current = sessionId;
@@ -175,6 +190,20 @@ export function App() {
     [isStreaming, sessionId, input]
   );
   const companionLabel = seedDraft.companion_name.trim() || DEFAULT_SEED.companion_name;
+
+  const mentionNames = useMemo(() => {
+    const names = [companionLabel];
+    for (const c of characters) {
+      if (!names.includes(c.name)) names.push(c.name);
+    }
+    return names;
+  }, [companionLabel, characters]);
+
+  const mentionMatches = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    return mentionNames.filter((n) => n.toLowerCase().startsWith(q));
+  }, [mentionQuery, mentionNames]);
 
   const closeActiveStream = (nextStatus = "idle"): void => {
     if (streamRef.current) {
@@ -284,12 +313,14 @@ export function App() {
       setMessages(
         memory.messages.map((item) => ({
           role: item.role,
+          name: item.name ?? undefined,
           content: item.content
         }))
       );
 
       if (memory.seed_context) {
         setSeedDraft(toDraft(memory.seed_context.seed, memory.seed_context.user_description ?? "", memory.seed_context.notes ?? DEFAULT_NOTES));
+        setCharacters(memory.seed_context.seed.characters ?? []);
         setSeedStatus("seeded");
       } else {
         // Apply default seed so companion_name is always available
@@ -321,9 +352,12 @@ export function App() {
     closeActiveStream("connecting");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setInput("");
+    setMentionQuery(null);
     setIsStreaming(true);
 
     let assistantBuffer = "";
+    let currentCharName = "";
+    const completedMessages: ChatMessage[] = [];
     const url = new URL("/v1/chat/stream", window.location.origin);
     url.searchParams.set("chat_session_id", selectedSession);
     url.searchParams.set("message", text);
@@ -339,6 +373,18 @@ export function App() {
       setStatus("streaming");
     });
 
+    source.addEventListener("char_start", (evt) => {
+      if (currentSessionRef.current !== selectedSession) {
+        source.close();
+        return;
+      }
+      const payload = parseEventData((evt as MessageEvent).data);
+      currentCharName = String(payload.name ?? "");
+      assistantBuffer = "";
+      setPendingAssistant("");
+      setPendingCharName(currentCharName);
+    });
+
     source.addEventListener("delta", (evt) => {
       if (currentSessionRef.current !== selectedSession) {
         source.close();
@@ -350,7 +396,24 @@ export function App() {
       setPendingAssistant(assistantBuffer);
     });
 
-    source.addEventListener("done", () => {
+    source.addEventListener("char_done", () => {
+      if (currentSessionRef.current !== selectedSession) {
+        return;
+      }
+      if (assistantBuffer.length > 0) {
+        const msg: ChatMessage = {
+          role: "assistant",
+          name: currentCharName || undefined,
+          content: assistantBuffer,
+        };
+        completedMessages.push(msg);
+        setMessages((prev) => [...prev, msg]);
+      }
+      assistantBuffer = "";
+      setPendingAssistant("");
+    });
+
+    source.addEventListener("done", (evt) => {
       if (streamRef.current === source) {
         streamRef.current = null;
       }
@@ -358,8 +421,27 @@ export function App() {
         source.close();
         return;
       }
-      if (assistantBuffer.length > 0) {
+      // If no char_done events fired (legacy single-character path),
+      // flush remaining buffer
+      if (completedMessages.length === 0 && assistantBuffer.length > 0) {
         setMessages((prev) => [...prev, { role: "assistant", content: assistantBuffer }]);
+      }
+      // Update characters from the response (includes newly created ad-hoc characters)
+      const donePayload = parseEventData((evt as MessageEvent).data);
+      const charNames = donePayload.characters;
+      if (Array.isArray(charNames) && charNames.length > 0) {
+        setCharacters((prev) => {
+          const existing = new Set(prev.map((c) => c.name));
+          const added = (charNames as string[])
+            .filter((n) => !existing.has(n))
+            .map((n) => ({
+              name: n,
+              backstory: "",
+              character_traits: [] as string[],
+              relationship_to_companion: "",
+            }));
+          return added.length > 0 ? [...prev, ...added] : prev;
+        });
       }
       setPendingAssistant("");
       setStatus("done");
@@ -379,7 +461,11 @@ export function App() {
         return;
       }
       if (assistantBuffer.length > 0) {
-        setMessages((prev) => [...prev, { role: "assistant", content: assistantBuffer }]);
+        setMessages((prev) => [...prev, {
+          role: "assistant",
+          name: currentCharName || undefined,
+          content: assistantBuffer,
+        }]);
       }
       setPendingAssistant("");
       setStatus("error");
@@ -391,7 +477,48 @@ export function App() {
     };
   };
 
+  const completeMention = (name: string) => {
+    const el = composerRef.current;
+    if (!el) return;
+    const before = input.slice(0, el.selectionStart);
+    const after = input.slice(el.selectionStart);
+    const mentionStart = before.lastIndexOf("@");
+    if (mentionStart === -1) return;
+    const newBefore = before.slice(0, mentionStart) + `@${name} `;
+    setInput(newBefore + after);
+    setMentionQuery(null);
+    // Restore cursor after React re-render
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = newBefore.length;
+      el.focus();
+    });
+  };
+
   const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Handle mention dropdown navigation
+    if (mentionQuery !== null && mentionMatches.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionMatches.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionMatches.length) % mentionMatches.length);
+        return;
+      }
+      if (event.key === "Tab" || event.key === "Enter") {
+        event.preventDefault();
+        completeMention(mentionMatches[mentionIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (!streamDisabled) {
@@ -588,6 +715,7 @@ export function App() {
                   graph={knowledgeGraph}
                   monologue={knowledgeMonologue}
                   status={knowledgeStatus}
+                  companionName={companionLabel}
                 />
               </div>
             )}
@@ -647,17 +775,30 @@ export function App() {
         <AffectPanel affect={knowledgeAffect} />
 
         <div ref={messagesPaneRef} className="panel messages">
-          {messages.map((msg, idx) => (
-            <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
-              {msg.role === "assistant" && <strong>{companionLabel}</strong>}
-              {msg.role === "system" && <strong>system</strong>}
-              {msg.role === "tool" && <strong>tool</strong>}
-              <div>{msg.content}</div>
-            </div>
-          ))}
+          {messages.map((msg, idx) => {
+            const speakerName = msg.role === "assistant"
+              ? (msg.name || companionLabel)
+              : msg.role === "user" ? "You" : msg.role;
+            const isNpc = msg.role === "assistant" && msg.name && msg.name !== companionLabel;
+            const speakerClass = msg.role === "assistant"
+              ? (isNpc ? "message-speaker message-speaker--npc" : "message-speaker")
+              : msg.role === "user"
+                ? "message-speaker message-speaker--user"
+                : "message-speaker message-speaker--system";
+            return (
+              <div key={`${msg.role}-${idx}`} className={`message ${msg.role}`}>
+                <span className={speakerClass}>{speakerName}</span>
+                <div>{msg.content}</div>
+              </div>
+            );
+          })}
           {(isStreaming || pendingAssistant.length > 0) && (
             <div className="message assistant">
-              <strong>{companionLabel}</strong>
+              {(() => {
+                const name = pendingAssistant ? (pendingCharName || companionLabel) : companionLabel;
+                const isNpc = pendingCharName && pendingCharName !== companionLabel;
+                return <span className={isNpc ? "message-speaker message-speaker--npc" : "message-speaker"}>{name}</span>;
+              })()}
               <div>{pendingAssistant || "..."}</div>
             </div>
           )}
@@ -665,13 +806,37 @@ export function App() {
         </div>
 
         <form className="composer" onSubmit={onSubmit}>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onInputKeyDown}
-            placeholder="Type a message..."
-            rows={2}
-          />
+          <div className="composer-input-wrap">
+            <textarea
+              ref={composerRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                const q = getActiveMention(e.target.value, e.target.selectionStart);
+                setMentionQuery(q);
+                setMentionIndex(0);
+              }}
+              onKeyDown={onInputKeyDown}
+              placeholder="Type a message..."
+              rows={2}
+            />
+            {mentionQuery !== null && mentionMatches.length > 0 && (
+              <ul className="mention-dropdown">
+                {mentionMatches.map((name, i) => (
+                  <li
+                    key={name}
+                    className={`mention-option ${i === mentionIndex ? "mention-option--active" : ""}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      completeMention(name);
+                    }}
+                  >
+                    {name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <button type="submit" disabled={streamDisabled}>
             Send
           </button>

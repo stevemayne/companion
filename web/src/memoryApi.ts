@@ -2,6 +2,7 @@ import { SeedPayload } from "./seedApi";
 
 type MemoryMessage = {
   role: "system" | "user" | "assistant" | "tool";
+  name?: string;
   content: string;
 };
 

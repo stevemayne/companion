@@ -23,9 +23,11 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     chat_session_id: UUID
     assistant_message: Message
+    assistant_messages: list[Message] = Field(default_factory=list)
     affect: CompanionAffect | None = None
     idempotency_replay: bool = False
     seed_version: int | None = None
+    characters: list[str] = Field(default_factory=list)
 
 
 class SeedContextUpsertRequest(BaseModel):

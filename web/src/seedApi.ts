@@ -1,9 +1,17 @@
+export type CharacterDef = {
+  name: string;
+  backstory: string;
+  character_traits: string[];
+  relationship_to_companion: string;
+};
+
 export type SeedPayload = {
   companion_name: string;
   backstory: string;
   character_traits: string[];
   goals: string[];
   relationship_setup: string;
+  characters: CharacterDef[];
 };
 
 export type SeedUpsertRequest = {

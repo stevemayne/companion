@@ -14,6 +14,7 @@ class Message(BaseModel):
     chat_session_id: UUID
     message_id: UUID = Field(default_factory=uuid4)
     role: Role
+    name: str | None = None
     content: str = Field(min_length=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -77,10 +78,18 @@ class CompanionAffect(BaseModel):
 
 class MonologueState(BaseModel):
     chat_session_id: UUID
+    character_name: str | None = None
     internal_monologue: str = Field(default="")
     affect: CompanionAffect = Field(default_factory=CompanionAffect)
     user_state: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class CharacterDef(BaseModel):
+    name: str = Field(min_length=1)
+    backstory: str = Field(min_length=1)
+    character_traits: list[str] = Field(default_factory=list)
+    relationship_to_companion: str = Field(default="")
 
 
 class CompanionSeed(BaseModel):
@@ -89,6 +98,7 @@ class CompanionSeed(BaseModel):
     character_traits: list[str] = Field(default_factory=list)
     goals: list[str] = Field(default_factory=list)
     relationship_setup: str = Field(min_length=1)
+    characters: list[CharacterDef] = Field(default_factory=list)
 
 
 class SessionSeedContext(BaseModel):

@@ -8,7 +8,8 @@ const payload = {
     backstory: "Backstory",
     character_traits: ["warm"],
     goals: ["trust"],
-    relationship_setup: "Companion"
+    relationship_setup: "Companion",
+    characters: []
   },
   notes: "note"
 };

@@ -33,7 +33,8 @@ def test_orchestrator_persists_monologue_per_session() -> None:
     assert unrelated is None
 
     persisted = app.state.container.monologue_store.get(
-        chat_session_id=UUID(response.json()["chat_session_id"])
+        chat_session_id=UUID(response.json()["chat_session_id"]),
+        character_name="Ari",
     )
     assert persisted is not None
     assert "anxious" in persisted.internal_monologue

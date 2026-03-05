@@ -316,6 +316,29 @@ body {
   background: #f2f2f2;
 }
 
+.message-speaker {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  padding: 1px 8px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  background: #174f72;
+}
+
+.message-speaker--npc {
+  background: #6b4f8a;
+}
+
+.message-speaker--system {
+  background: #6b6357;
+}
+
+.message-speaker--user {
+  background: #2e7d5b;
+}
+
 /* ===== Composer ===== */
 
 .composer {
@@ -326,13 +349,47 @@ body {
   padding: 0;
 }
 
-.composer textarea {
+.composer-input-wrap {
   flex: 1;
+  position: relative;
+}
+
+.composer textarea {
+  width: 100%;
   font: inherit;
   border: 1px solid #c9c2b3;
   border-radius: 10px;
   padding: 10px;
   resize: none;
+}
+
+.mention-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin: 0 0 4px;
+  padding: 4px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #d9d4c9;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  min-width: 140px;
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 5;
+}
+
+.mention-option {
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mention-option:hover,
+.mention-option--active {
+  background: #eaf9ff;
+  color: #174f72;
 }
 
 .composer button {
@@ -399,6 +456,11 @@ body {
 .knowledge-item.companion {
   background: #fef6e8;
   border-left: 3px solid #c9944a;
+}
+
+.knowledge-item.npc {
+  background: #f3eefa;
+  border-left: 3px solid #6b4f8a;
 }
 
 .knowledge-item.relation {

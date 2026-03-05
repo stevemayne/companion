@@ -183,6 +183,7 @@ def test_affect_state_appears_in_system_prompt_when_set() -> None:
     app.state.container.monologue_store.upsert(
         MonologueState(
             chat_session_id=UUID(session_id),
+            character_name="Ari",
             affect=CompanionAffect(mood="wary", trust=2.0, valence=-0.2),
         )
     )

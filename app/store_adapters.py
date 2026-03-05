@@ -15,6 +15,7 @@ from qdrant_client.http import models as qdrant_models
 from app.api_models import SeedContextUpsertRequest
 from app.embedding import EmbeddingProvider
 from app.schemas import (
+    CharacterDef,
     CompanionAffect,
     CompanionSeed,
     GraphRelation,
@@ -45,14 +46,16 @@ class PostgresEpisodicStore:
                       chat_session_id,
                       message_id,
                       role,
+                      name,
                       content,
                       created_at
-                    ) VALUES (%s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
                         _uuid_text(message.chat_session_id),
                         _uuid_text(message.message_id),
                         message.role,
+                        message.name,
                         message.content,
                         message.created_at,
                     ),
@@ -64,7 +67,7 @@ class PostgresEpisodicStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT chat_session_id, message_id, role, content, created_at
+                    SELECT chat_session_id, message_id, role, name, content, created_at
                     FROM episodic_messages
                     WHERE chat_session_id = %s
                     ORDER BY created_at DESC
@@ -79,8 +82,9 @@ class PostgresEpisodicStore:
                 chat_session_id=row[0],
                 message_id=row[1],
                 role=row[2],
-                content=row[3],
-                created_at=row[4],
+                name=row[3],
+                content=row[4],
+                created_at=row[5],
             )
             for row in rows
         ]
@@ -118,18 +122,33 @@ class PostgresMonologueStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
 
-    def get(self, *, chat_session_id: UUID) -> MonologueState | None:
+    def get(
+        self, *, chat_session_id: UUID, character_name: str | None = None,
+    ) -> MonologueState | None:
         with psycopg.connect(self._dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT chat_session_id, internal_monologue, affect,
-                           user_state, updated_at
-                    FROM monologue_states
-                    WHERE chat_session_id = %s
-                    """,
-                    (_uuid_text(chat_session_id),),
-                )
+                if character_name is None:
+                    cur.execute(
+                        """
+                        SELECT chat_session_id, internal_monologue, affect,
+                               user_state, updated_at, character_name
+                        FROM monologue_states
+                        WHERE chat_session_id = %s
+                          AND character_name IS NULL
+                        """,
+                        (_uuid_text(chat_session_id),),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT chat_session_id, internal_monologue, affect,
+                               user_state, updated_at, character_name
+                        FROM monologue_states
+                        WHERE chat_session_id = %s
+                          AND character_name = %s
+                        """,
+                        (_uuid_text(chat_session_id), character_name),
+                    )
                 row = cur.fetchone()
         if row is None:
             return None
@@ -143,6 +162,7 @@ class PostgresMonologueStore:
             affect=affect,
             user_state=user_state,
             updated_at=row[4],
+            character_name=row[5],
         )
 
     def upsert(self, state: MonologueState) -> MonologueState:
@@ -152,12 +172,13 @@ class PostgresMonologueStore:
                     """
                     INSERT INTO monologue_states (
                       chat_session_id,
+                      character_name,
                       internal_monologue,
                       affect,
                       user_state,
                       updated_at
-                    ) VALUES (%s, %s, %s::jsonb, %s::jsonb, %s)
-                    ON CONFLICT (chat_session_id)
+                    ) VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    ON CONFLICT (chat_session_id, COALESCE(character_name, ''))
                     DO UPDATE SET
                       internal_monologue = EXCLUDED.internal_monologue,
                       affect = EXCLUDED.affect,
@@ -166,6 +187,7 @@ class PostgresMonologueStore:
                     """,
                     (
                         _uuid_text(state.chat_session_id),
+                        state.character_name,
                         state.internal_monologue,
                         json.dumps(state.affect.model_dump()),
                         json.dumps(state.user_state),
@@ -391,6 +413,15 @@ class QdrantVectorStore:
         return items
 
 
+def _parse_characters(raw: Any) -> list[CharacterDef]:
+    if raw is None:
+        return []
+    items = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(items, list):
+        return []
+    return [CharacterDef.model_validate(c) for c in items]
+
+
 class PostgresSeedContextStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -448,7 +479,8 @@ class PostgresSeedContextStore:
                       user_description,
                       notes,
                       created_at,
-                      updated_at
+                      updated_at,
+                      characters
                     FROM session_seed_contexts
                     WHERE chat_session_id = %s
                     """,
@@ -461,6 +493,8 @@ class PostgresSeedContextStore:
         raw_goals = row[4]
         traits = json.loads(raw_traits) if isinstance(raw_traits, str) else list(raw_traits)
         goals = json.loads(raw_goals) if isinstance(raw_goals, str) else list(raw_goals)
+        raw_chars = row[10]
+        characters = _parse_characters(raw_chars)
         return SessionSeedContext(
             chat_session_id=chat_session_id,
             version=row[0],
@@ -470,6 +504,7 @@ class PostgresSeedContextStore:
                 character_traits=traits,
                 goals=goals,
                 relationship_setup=row[5],
+                characters=characters,
             ),
             user_description=row[6],
             notes=row[7],
@@ -493,7 +528,8 @@ class PostgresSeedContextStore:
                       user_description,
                       notes,
                       created_at,
-                      updated_at
+                      updated_at,
+                      characters
                     FROM session_seed_contexts
                     ORDER BY updated_at DESC
                     LIMIT %s
@@ -508,6 +544,7 @@ class PostgresSeedContextStore:
             raw_goals = row[5]
             traits = json.loads(raw_traits) if isinstance(raw_traits, str) else list(raw_traits)
             goals = json.loads(raw_goals) if isinstance(raw_goals, str) else list(raw_goals)
+            characters = _parse_characters(row[11])
             contexts.append(
                 SessionSeedContext(
                     chat_session_id=row[0],
@@ -518,6 +555,7 @@ class PostgresSeedContextStore:
                         character_traits=traits,
                         goals=goals,
                         relationship_setup=row[6],
+                        characters=characters,
                     ),
                     user_description=row[7],
                     notes=row[8],
@@ -542,9 +580,10 @@ class PostgresSeedContextStore:
                       relationship_setup,
                       user_description,
                       notes,
+                      characters,
                       created_at,
                       updated_at
-                    ) VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb, %s, %s)
                     ON CONFLICT (chat_session_id)
                     DO UPDATE SET
                       version = EXCLUDED.version,
@@ -555,6 +594,7 @@ class PostgresSeedContextStore:
                       relationship_setup = EXCLUDED.relationship_setup,
                       user_description = EXCLUDED.user_description,
                       notes = EXCLUDED.notes,
+                      characters = EXCLUDED.characters,
                       updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -567,6 +607,7 @@ class PostgresSeedContextStore:
                         context.seed.relationship_setup,
                         context.user_description,
                         context.notes,
+                        json.dumps([c.model_dump() for c in context.seed.characters]),
                         context.created_at,
                         context.updated_at,
                     ),
