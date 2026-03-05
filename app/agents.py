@@ -178,6 +178,15 @@ class BackgroundAgentDispatcher:
                         importance=fact.importance,
                     )
                 )
+                if fact.subject and fact.object and fact.relation_type:
+                    self._graph_store.upsert_relation(
+                        GraphRelation(
+                            chat_session_id=chat_session_id,
+                            source=fact.subject,
+                            relation=fact.relation_type,
+                            target=fact.object,
+                        )
+                    )
 
             for em in outcome.entities:
                 if em.relationship:
@@ -208,6 +217,15 @@ class BackgroundAgentDispatcher:
                         importance=fact.importance,
                     )
                 )
+                if fact.subject and fact.object and fact.relation_type:
+                    self._graph_store.upsert_relation(
+                        GraphRelation(
+                            chat_session_id=chat_session_id,
+                            source=fact.subject,
+                            relation=fact.relation_type,
+                            target=fact.object,
+                        )
+                    )
 
             trace = build_trace_base(chat_session_id=chat_session_id)
             trace.update({

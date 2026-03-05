@@ -305,6 +305,29 @@ def test_parse_extraction_fenced_wrapper() -> None:
     assert entities == []
 
 
+def test_parse_extraction_relation_type_defaults_to_relates_to() -> None:
+    facts, _ = _parse_extraction_payload(
+        '[{"subject": "User", "predicate": "likes", "object": "tea", "text": "User likes tea"}]'
+    )
+    assert facts[0].relation_type == "RELATES_TO"
+
+
+def test_parse_extraction_relation_type_parsed() -> None:
+    facts, _ = _parse_extraction_payload(
+        '[{"subject": "User", "predicate": "likes", "object": "tea", '
+        '"text": "User likes tea", "relation_type": "LIKES"}]'
+    )
+    assert facts[0].relation_type == "LIKES"
+
+
+def test_parse_extraction_unknown_relation_type_falls_back() -> None:
+    facts, _ = _parse_extraction_payload(
+        '[{"subject": "User", "predicate": "likes", "object": "tea", '
+        '"text": "User likes tea", "relation_type": "INVENTED_TYPE"}]'
+    )
+    assert facts[0].relation_type == "RELATES_TO"
+
+
 # ---------------------------------------------------------------------------
 # validate_facts
 # ---------------------------------------------------------------------------

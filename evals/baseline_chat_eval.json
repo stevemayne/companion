@@ -23,8 +23,7 @@
       "I am nervous to see Sarah tonight."
     ],
     "must_contain": [
-      "I argued with Sarah yesterday.",
-      "user-MENTIONED_IN_SESSION->Sarah"
+      "I argued with Sarah yesterday."
     ]
   },
   {

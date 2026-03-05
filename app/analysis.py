@@ -492,6 +492,10 @@ def _parse_llm_payload(raw: str) -> _LLMAnalysisPayload:
 # Fact extraction
 # ---------------------------------------------------------------------------
 
+CANONICAL_RELATION_TYPES: frozenset[str] = frozenset({
+    "IS", "HAS", "LIKES", "DISLIKES", "WANTS", "FEELS",
+    "EXPERIENCED", "DOES", "KNOWS", "SAID", "RELATES_TO", "LOCATED_AT",
+})
 
 
 @dataclass(frozen=True)
@@ -501,6 +505,7 @@ class ExtractedFact:
     object: str
     text: str
     importance: float = 0.5
+    relation_type: str = "RELATES_TO"
 
 
 @dataclass(frozen=True)
@@ -685,7 +690,8 @@ class LLMFactExtractor:
             "Given a conversation turn, extract facts from BOTH speakers "
             "and any named entities mentioned.\n\n"
             "## Fact rules\n"
-            "- Each fact must have: subject, predicate, object, text, importance.\n"
+            "- Each fact must have: subject, predicate, object, text, "
+            "importance, relation_type.\n"
             f"- subject: 'User' for user facts, '{name}' for companion self-facts.\n"
             "- predicate: the verb phrase.\n"
             "- object: the target of the action.\n"
@@ -693,6 +699,21 @@ class LLMFactExtractor:
             "- importance: float 0.0-1.0. Relationships and core identity "
             "(0.7-0.9), preferences and opinions (0.5-0.7), transient "
             "observations (0.2-0.4).\n"
+            "- relation_type: one of these canonical types that best "
+            "categorizes the fact:\n"
+            "  IS (identity, profession, state of being), "
+            "HAS (possession, attributes, body parts), "
+            "LIKES (preferences, enjoyment), "
+            "DISLIKES (aversions, negative preferences), "
+            "WANTS (explicit unfulfilled goals or wishes), "
+            "FEELS (emotions, moods, internal states), "
+            "EXPERIENCED (past events, things that happened), "
+            "DOES (actions, movements, habits, activities), "
+            "KNOWS (knowledge, skills, awareness), "
+            "SAID (statements, suggestions, imaginings), "
+            "RELATES_TO (interpersonal relationships), "
+            "LOCATED_AT (lives, works, or is currently at a place). "
+            "Pick the single best match.\n"
             "- The subject must be WHO THE FACT IS ABOUT, not who caused "
             "or mentioned it. If the user transforms the companion's body, "
             f"the resulting physical state is a fact about {name}, not the "
@@ -728,11 +749,11 @@ class LLMFactExtractor:
             "  {{\n"
             '    "facts": [\n'
             '      {{"subject": "User", "predicate": "has sister who started",'
-            ' "object": "a new job",'
+            ' "relation_type": "RELATES_TO", "object": "a new job",'
             ' "text": "User\'s sister Sarah started a new job",'
             ' "importance": 0.7}},\n'
             f'      {{"subject": "{name}", "predicate": "used to work in",'
-            ' "object": "HR",'
+            f' "relation_type": "EXPERIENCED", "object": "HR",'
             f' "text": "{name} used to work in HR",'
             ' "importance": 0.5}}\n'
             "    ],\n"
@@ -748,7 +769,7 @@ class LLMFactExtractor:
             "  {{\n"
             '    "facts": [\n'
             f'      {{"subject": "{name}", "predicate": "has",'
-            ' "object": "newfound strength",'
+            f' "relation_type": "HAS", "object": "newfound strength",'
             f' "text": "{name} has newfound strength and can easily lift '
             'heavy objects",'
             ' "importance": 0.6}}\n'
@@ -851,6 +872,8 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                 importance = max(0.0, min(1.0, float(raw_importance)))
             except (TypeError, ValueError):
                 importance = 0.5
+            raw_rt = str(item.get("relation_type", "RELATES_TO")).strip().upper()
+            relation_type = raw_rt if raw_rt in CANONICAL_RELATION_TYPES else "RELATES_TO"
             if text and subject and text not in seen_texts:
                 seen_texts.add(text)
                 facts.append(
@@ -860,6 +883,7 @@ def _parse_facts_list(items: list) -> list[ExtractedFact]:
                         object=obj,
                         text=text,
                         importance=importance,
+                        relation_type=relation_type,
                     )
                 )
         elif isinstance(item, str):

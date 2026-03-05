@@ -111,10 +111,9 @@ def test_knowledge_endpoint_returns_facts_and_graph() -> None:
     # Monologue should exist after a turn
     assert data["monologue"] is not None
 
-    # Graph should have at least a MENTIONED_IN_SESSION relation from postprocess
-    relations = data["graph"]
-    relation_types = [r["relation"] for r in relations]
-    assert "MENTIONED_IN_SESSION" in relation_types
+    # Graph relations are created by the background LLM extractor;
+    # just verify the structure is valid.
+    assert all(isinstance(r, dict) for r in data["graph"])
 
 
 def test_knowledge_endpoint_empty_session() -> None:

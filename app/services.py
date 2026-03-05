@@ -835,20 +835,6 @@ class CognitiveOrchestrator:
         return updated
 
     def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
-        graph_writes: list[str] = []
-        for entity in preprocess.entities:
-            cleaned = entity.strip()
-            if not cleaned:
-                continue
-            relation = GraphRelation(
-                chat_session_id=message.chat_session_id,
-                source="user",
-                relation="MENTIONED_IN_SESSION",
-                target=cleaned,
-            )
-            self.graph_store.upsert_relation(relation)
-            graph_writes.append(f"{relation.source}-{relation.relation}->{relation.target}")
-
         reflection = (
             f"Focus on a {preprocess.emotion} user; "
             f"intent={preprocess.intent}; "
@@ -875,7 +861,7 @@ class CognitiveOrchestrator:
         self.monologue_store.upsert(monologue_state)
         return {
             "semantic_upserts": [],
-            "graph_upserts": graph_writes,
+            "graph_upserts": [],
             "monologue": monologue_state.internal_monologue,
             "affect": current_affect.model_dump(),
         }
