@@ -36,6 +36,7 @@ from app.embedding import (
     OpenAICompatibleEmbeddingProvider,
 )
 from app.inference import EndpointConfig, OpenAICompatibleProvider, build_inference_provider
+from app.companion import CompanionContext, build_companion_context
 from app.prompting import build_companion_system_prompt
 from app.retrieval import HeuristicRetrievalDecider, LLMRetrievalDecider, RetrievalDecider
 from app.schemas import (
@@ -76,7 +77,8 @@ class VectorStore(Protocol):
     def upsert_memory(self, item: MemoryItem) -> None: ...
 
     def query_similar(
-        self, *, chat_session_id: UUID, query: str, limit: int = 10
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+        query: str, limit: int = 10,
     ) -> list[MemoryItem]: ...
 
     def update_access(self, *, memory_id: UUID) -> None: ...
@@ -86,31 +88,52 @@ class VectorStore(Protocol):
         status: MemoryStatus | None = None,
     ) -> None: ...
 
-    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]: ...
+    def list_memories(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> list[MemoryItem]: ...
 
 
 class GraphStore(Protocol):
     def upsert_relation(self, relation: GraphRelation) -> None: ...
 
     def get_related(
-        self, *, chat_session_id: UUID, entity: str, limit: int = 10
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+        entity: str, limit: int = 10,
     ) -> list[GraphRelation]: ...
 
-    def list_relations(self, *, chat_session_id: UUID) -> list[GraphRelation]: ...
+    def list_relations(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> list[GraphRelation]: ...
+
+
+class MonologueStore(Protocol):
+    def get(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> MonologueState | None: ...
+
+    def upsert(self, state: MonologueState) -> MonologueState: ...
 
 
 class SeedContextStore(Protocol):
     def create(
-        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest
+        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest,
+        companion_id: UUID | None = None,
     ) -> SessionSeedContext: ...
 
     def update(
-        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest
+        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest,
+        companion_id: UUID | None = None,
     ) -> SessionSeedContext: ...
 
-    def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None: ...
+    def get(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> SessionSeedContext | None: ...
 
     def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]: ...
+
+    def list_for_session(
+        self, *, chat_session_id: UUID,
+    ) -> list[SessionSeedContext]: ...
 
 class InMemoryEpisodicStore:
     def __init__(self) -> None:
@@ -179,7 +202,8 @@ class InMemoryVectorStore:
             self._vectors.pop(chat_session_id, None)
 
     def query_similar(
-        self, *, chat_session_id: UUID, query: str, limit: int = 10
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+        query: str, limit: int = 10,
     ) -> list[MemoryItem]:
         from app.schemas import MemoryStatus
 
@@ -191,6 +215,8 @@ class InMemoryVectorStore:
         scored: list[tuple[float, MemoryItem]] = []
         for item, vec in zip(items, vectors, strict=True):
             if item.status != MemoryStatus.ACTIVE:
+                continue
+            if companion_id is not None and item.companion_id != companion_id:
                 continue
             sim = _cosine_similarity(query_vec, vec)
             if sim <= 0.0:
@@ -236,9 +262,14 @@ class InMemoryVectorStore:
                         items[i] = item.model_copy(update=updates)
                         return
 
-    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]:
+    def list_memories(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> list[MemoryItem]:
         with self._lock:
-            return list(self._items.get(chat_session_id, []))
+            items = list(self._items.get(chat_session_id, []))
+        if companion_id is not None:
+            items = [m for m in items if m.companion_id == companion_id]
+        return items
 
 
 class InMemoryGraphStore:
@@ -252,11 +283,14 @@ class InMemoryGraphStore:
             bucket.append(relation)
 
     def get_related(
-        self, *, chat_session_id: UUID, entity: str, limit: int = 10
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+        entity: str, limit: int = 10,
     ) -> list[GraphRelation]:
         entity_lc = entity.lower()
         with self._lock:
             relations = list(self._relations.get(chat_session_id, []))
+        if companion_id is not None:
+            relations = [r for r in relations if r.companion_id == companion_id]
         related = [
             relation
             for relation in relations
@@ -268,90 +302,132 @@ class InMemoryGraphStore:
         with self._lock:
             self._relations.pop(chat_session_id, None)
 
-    def list_relations(self, *, chat_session_id: UUID) -> list[GraphRelation]:
+    def list_relations(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> list[GraphRelation]:
         with self._lock:
-            return list(self._relations.get(chat_session_id, []))
+            relations = list(self._relations.get(chat_session_id, []))
+        if companion_id is not None:
+            relations = [r for r in relations if r.companion_id == companion_id]
+        return relations
 
 
 class InMemoryMonologueStore:
     def __init__(self) -> None:
-        self._states: dict[UUID, MonologueState] = {}
+        self._states: dict[tuple[UUID, UUID | None], MonologueState] = {}
         self._lock = Lock()
 
-    def get(self, *, chat_session_id: UUID) -> MonologueState | None:
+    def get(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> MonologueState | None:
         with self._lock:
-            return self._states.get(chat_session_id)
+            result = self._states.get((chat_session_id, companion_id))
+            if result is None and companion_id is None:
+                for key, state in self._states.items():
+                    if key[0] == chat_session_id:
+                        return state
+            return result
 
     def upsert(self, state: MonologueState) -> MonologueState:
+        key = (state.chat_session_id, state.companion_id)
         with self._lock:
-            self._states[state.chat_session_id] = state
+            self._states[key] = state
         return state
 
     def delete_session(self, *, chat_session_id: UUID) -> None:
         with self._lock:
-            self._states.pop(chat_session_id, None)
+            to_remove = [k for k in self._states if k[0] == chat_session_id]
+            for k in to_remove:
+                del self._states[k]
 
 
 class InMemorySeedContextStore:
     def __init__(self) -> None:
-        self._seeds: dict[UUID, SessionSeedContext] = {}
+        self._seeds: dict[tuple[UUID, UUID], SessionSeedContext] = {}
         self._lock = Lock()
 
     def create(
-        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest
+        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest,
+        companion_id: UUID | None = None,
     ) -> SessionSeedContext:
-        with self._lock:
-            exists = chat_session_id in self._seeds
-        if exists:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Seed context already exists for session.",
-            )
         seed_context = SessionSeedContext(
             chat_session_id=chat_session_id,
+            companion_id=companion_id or uuid4(),
             version=1,
             seed=payload.seed,
             user_description=payload.user_description,
             notes=payload.notes,
         )
+        key = (chat_session_id, seed_context.companion_id)
         with self._lock:
-            self._seeds[chat_session_id] = seed_context
+            if key in self._seeds:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Seed context already exists for this companion.",
+                )
+            self._seeds[key] = seed_context
         return seed_context
 
     def update(
-        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest
+        self, *, chat_session_id: UUID, payload: SeedContextUpsertRequest,
+        companion_id: UUID | None = None,
     ) -> SessionSeedContext:
         with self._lock:
-            existing = self._seeds.get(chat_session_id)
+            existing = self._find(chat_session_id, companion_id)
         if existing is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Seed context not found for session.",
+                detail="Seed context not found.",
             )
         updated = SessionSeedContext(
             chat_session_id=chat_session_id,
+            companion_id=existing.companion_id,
             version=existing.version + 1,
             seed=payload.seed,
             user_description=payload.user_description,
             notes=payload.notes,
         )
         with self._lock:
-            self._seeds[chat_session_id] = updated
+            self._seeds[(chat_session_id, existing.companion_id)] = updated
         return updated
 
-    def get(self, *, chat_session_id: UUID) -> SessionSeedContext | None:
+    def get(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> SessionSeedContext | None:
         with self._lock:
-            return self._seeds.get(chat_session_id)
+            return self._find(chat_session_id, companion_id)
+
+    def list_for_session(
+        self, *, chat_session_id: UUID,
+    ) -> list[SessionSeedContext]:
+        with self._lock:
+            return [
+                v for k, v in self._seeds.items() if k[0] == chat_session_id
+            ]
 
     def delete_session(self, *, chat_session_id: UUID) -> None:
         with self._lock:
-            self._seeds.pop(chat_session_id, None)
+            to_remove = [k for k in self._seeds if k[0] == chat_session_id]
+            for k in to_remove:
+                del self._seeds[k]
 
     def list_seed_contexts(self, *, limit: int = 50) -> list[SessionSeedContext]:
         with self._lock:
             contexts = list(self._seeds.values())
         contexts.sort(key=lambda item: item.updated_at, reverse=True)
         return contexts[:limit]
+
+    def _find(
+        self, chat_session_id: UUID, companion_id: UUID | None,
+    ) -> SessionSeedContext | None:
+        """Find seed: by (session, companion) if companion_id given, else first for session."""
+        if companion_id is not None:
+            return self._seeds.get((chat_session_id, companion_id))
+        # Return first companion for this session (backward compat)
+        for key, ctx in self._seeds.items():
+            if key[0] == chat_session_id:
+                return ctx
+        return None
 
 
 def _rerank_memories(
@@ -579,7 +655,7 @@ class CognitiveOrchestrator:
     episodic_store: EpisodicStore
     vector_store: VectorStore
     graph_store: GraphStore
-    monologue_store: InMemoryMonologueStore | PostgresMonologueStore
+    monologue_store: MonologueStore
     seed_store: SeedContextStore
     model_provider: ModelProvider
     intent_analyzer: IntentAnalyzer
@@ -587,7 +663,22 @@ class CognitiveOrchestrator:
         default_factory=HeuristicRetrievalDecider,
     )
 
-    def handle_turn(self, message: Message) -> tuple[Message, dict[str, Any]]:
+    def handle_turn(
+        self, message: Message, companion: CompanionContext | None = None,
+    ) -> tuple[Message, dict[str, Any]]:
+        # Build companion context if not provided (backward compat)
+        if companion is None:
+            seed_context = self.seed_store.get(
+                chat_session_id=message.chat_session_id,
+            )
+            if seed_context is not None:
+                companion = build_companion_context(
+                    seed_context=seed_context,
+                    vector_store=self.vector_store,
+                    graph_store=self.graph_store,
+                    monologue_store=self.monologue_store,
+                )
+
         analysis = self.intent_analyzer.analyze(
             chat_session_id=message.chat_session_id,
             content=message.content,
@@ -603,20 +694,28 @@ class CognitiveOrchestrator:
 
         if retrieval_decision.should_retrieve:
             query = retrieval_decision.rewritten_query or message.content
-            raw_candidates = self.vector_store.query_similar(
-                chat_session_id=message.chat_session_id,
-                query=query,
-                limit=15,
-            )
+            if companion is not None:
+                raw_candidates = companion.memories.query_similar(
+                    query=query, limit=15,
+                )
+            else:
+                raw_candidates = self.vector_store.query_similar(
+                    chat_session_id=message.chat_session_id,
+                    query=query, limit=15,
+                )
             semantic_context = _rerank_memories(
                 [m for m in raw_candidates if m.kind != MemoryKind.COMPANION],
                 entities=preprocess.entities,
                 limit=5,
             )
             for mem in semantic_context:
-                self.vector_store.update_access(memory_id=mem.memory_id)
+                if companion is not None:
+                    companion.memories.update_access(memory_id=mem.memory_id)
+                else:
+                    self.vector_store.update_access(memory_id=mem.memory_id)
             graph_context = self._graph_context(
                 chat_session_id=message.chat_session_id,
+                companion=companion,
                 entities=preprocess.entities,
             )
         else:
@@ -629,6 +728,7 @@ class CognitiveOrchestrator:
             preprocess=preprocess,
             semantic_context=semantic_context,
             graph_context=graph_context,
+            companion=companion,
         )
         response = self.model_provider.generate(
             chat_session_id=message.chat_session_id,
@@ -637,6 +737,7 @@ class CognitiveOrchestrator:
         response = self._enforce_seeded_identity(
             chat_session_id=message.chat_session_id,
             response=response,
+            companion=companion,
         )
         if not response:
             logger.warning("Empty response from model, using fallback")
@@ -646,10 +747,14 @@ class CognitiveOrchestrator:
             chat_session_id=message.chat_session_id,
             message_id=uuid4(),
             role="assistant",
+            speaker_id=companion.companion_id if companion else None,
+            speaker_name=companion.name if companion else None,
             content=response,
         )
         self.episodic_store.append_message(assistant_message)
-        writes = self._postprocess(message=message, preprocess=preprocess)
+        writes = self._postprocess(
+            message=message, preprocess=preprocess, companion=companion,
+        )
         trace = {
             "preprocess": {
                 "intent": preprocess.intent,
@@ -684,13 +789,21 @@ class CognitiveOrchestrator:
         }
         return assistant_message, trace
 
-    def _graph_context(self, *, chat_session_id: UUID, entities: list[str]) -> list[GraphRelation]:
+    def _graph_context(
+        self, *, chat_session_id: UUID, companion: CompanionContext | None = None,
+        entities: list[str],
+    ) -> list[GraphRelation]:
+        def _get_related(entity: str, limit: int) -> list[GraphRelation]:
+            if companion is not None:
+                return companion.graph.get_related(entity=entity, limit=limit)
+            return self.graph_store.get_related(
+                chat_session_id=chat_session_id, entity=entity, limit=limit,
+            )
+
         # Pass 1: expand entity set through ALSO_KNOWN_AS aliases
         all_entities: set[str] = set(entities)
         for entity in entities:
-            for rel in self.graph_store.get_related(
-                chat_session_id=chat_session_id, entity=entity, limit=10,
-            ):
+            for rel in _get_related(entity, 10):
                 if rel.relation == "ALSO_KNOWN_AS":
                     all_entities.add(rel.source)
                     all_entities.add(rel.target)
@@ -699,9 +812,7 @@ class CognitiveOrchestrator:
         related: list[GraphRelation] = []
         seen: set[tuple[str, str, str]] = set()
         for entity in all_entities:
-            for rel in self.graph_store.get_related(
-                chat_session_id=chat_session_id, entity=entity, limit=5,
-            ):
+            for rel in _get_related(entity, 5):
                 key = (rel.source.lower(), rel.relation, rel.target.lower())
                 if key not in seen:
                     seen.add(key)
@@ -716,18 +827,30 @@ class CognitiveOrchestrator:
         preprocess: PreprocessResult,
         semantic_context: list[MemoryItem],
         graph_context: list[GraphRelation],
+        companion: CompanionContext | None = None,
     ) -> list[dict[str, str]]:
         recent_messages = self.episodic_store.get_recent_messages(
             chat_session_id=chat_session_id,
             limit=50,
         )
-        monologue = self.monologue_store.get(chat_session_id=chat_session_id)
-        seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+        if companion is not None:
+            monologue = companion.monologue.get()
+            seed_context = self.seed_store.get(
+                chat_session_id=chat_session_id,
+                companion_id=companion.companion_id,
+            )
+            all_memories = companion.memories.list_memories()
+        else:
+            monologue = self.monologue_store.get(chat_session_id=chat_session_id)
+            seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+            all_memories = self.vector_store.list_memories(
+                chat_session_id=chat_session_id,
+            )
         companion_system_prompt = build_companion_system_prompt(seed_context)
 
         # Load companion self-facts for self-consistency
         companion_facts = [
-            m for m in self.vector_store.list_memories(chat_session_id=chat_session_id)
+            m for m in all_memories
             if m.kind == MemoryKind.COMPANION and m.status == MemoryStatus.ACTIVE
         ]
 
@@ -816,12 +939,17 @@ class CognitiveOrchestrator:
         messages.append({"role": "user", "content": user_message.content})
         return messages
 
-    def _enforce_seeded_identity(self, *, chat_session_id: UUID, response: str) -> str:
-        seed_context = self.seed_store.get(chat_session_id=chat_session_id)
-        if seed_context is None:
-            return response
-
-        companion_name = seed_context.seed.companion_name
+    def _enforce_seeded_identity(
+        self, *, chat_session_id: UUID, response: str,
+        companion: CompanionContext | None = None,
+    ) -> str:
+        if companion is not None:
+            companion_name = companion.name
+        else:
+            seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+            if seed_context is None:
+                return response
+            companion_name = seed_context.seed.companion_name
         updated = re.sub(
             r"\bmy name is assistant\b",
             f"my name is {companion_name}",
@@ -836,15 +964,21 @@ class CognitiveOrchestrator:
         )
         return updated
 
-    def _postprocess(self, *, message: Message, preprocess: PreprocessResult) -> dict[str, Any]:
+    def _postprocess(
+        self, *, message: Message, preprocess: PreprocessResult,
+        companion: CompanionContext | None = None,
+    ) -> dict[str, Any]:
         reflection = (
             f"Focus on a {preprocess.emotion} user; "
             f"intent={preprocess.intent}; "
             f"entities={','.join(preprocess.entities) or 'none'}"
         )
-        current_state = self.monologue_store.get(
-            chat_session_id=message.chat_session_id,
-        )
+        if companion is not None:
+            current_state = companion.monologue.get()
+        else:
+            current_state = self.monologue_store.get(
+                chat_session_id=message.chat_session_id,
+            )
         # Preserve current affect and user_state — the background LLM
         # reflector updates both asynchronously after each turn.
         current_affect = (
@@ -856,11 +990,15 @@ class CognitiveOrchestrator:
 
         monologue_state = MonologueState(
             chat_session_id=message.chat_session_id,
+            companion_id=companion.companion_id if companion else None,
             internal_monologue=reflection,
             affect=current_affect,
             user_state=user_state,
         )
-        self.monologue_store.upsert(monologue_state)
+        if companion is not None:
+            companion.monologue.upsert(monologue_state)
+        else:
+            self.monologue_store.upsert(monologue_state)
         return {
             "semantic_upserts": [],
             "graph_upserts": [],
@@ -882,7 +1020,7 @@ class ChatService:
     episodic_store: EpisodicStore
     vector_store: VectorStore
     graph_store: GraphStore
-    monologue_store: InMemoryMonologueStore | PostgresMonologueStore
+    monologue_store: MonologueStore
     seed_store: SeedContextStore
     orchestrator: CognitiveOrchestrator
     idempotency_cache: dict[str, Message]
@@ -930,13 +1068,26 @@ class ChatService:
         )
         self.episodic_store.append_message(user_message)
 
-        assistant_message, trace = self.orchestrator.handle_turn(user_message)
+        # Build companion context for this turn
         seed_context = self.seed_store.get(chat_session_id=request.chat_session_id)
+        companion: CompanionContext | None = None
+        if seed_context is not None:
+            companion = build_companion_context(
+                seed_context=seed_context,
+                vector_store=self.vector_store,
+                graph_store=self.graph_store,
+                monologue_store=self.monologue_store,
+            )
+
+        assistant_message, trace = self.orchestrator.handle_turn(
+            user_message, companion=companion,
+        )
         self.agent_dispatcher.enqueue_turn(
             chat_session_id=request.chat_session_id,
             user_message=user_message.content,
             assistant_message=assistant_message.content,
-            companion_name=seed_context.seed.companion_name if seed_context else None,
+            companion_name=companion.name if companion else None,
+            companion_id=companion.companion_id if companion else None,
         )
 
         if cache_key is not None:
@@ -960,6 +1111,7 @@ class ChatService:
         )
         return ChatResponse(
             chat_session_id=request.chat_session_id,
+            companion_id=companion.companion_id if companion else None,
             assistant_message=assistant_message,
             affect=monologue_state.affect if monologue_state else None,
             idempotency_replay=False,
@@ -976,12 +1128,23 @@ class ChatService:
             seed_context=self.seed_store.get(chat_session_id=chat_session_id),
         )
 
-    def get_knowledge(self, *, chat_session_id: UUID) -> KnowledgeResponse:
-        facts = self.vector_store.list_memories(chat_session_id=chat_session_id)
-        graph = self.graph_store.list_relations(chat_session_id=chat_session_id)
-        monologue_state = self.monologue_store.get(chat_session_id=chat_session_id)
+    def get_knowledge(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> KnowledgeResponse:
+        seed_context = self.seed_store.get(chat_session_id=chat_session_id)
+        cid = companion_id or (seed_context.companion_id if seed_context else None)
+        facts = self.vector_store.list_memories(
+            chat_session_id=chat_session_id, companion_id=cid,
+        )
+        graph = self.graph_store.list_relations(
+            chat_session_id=chat_session_id, companion_id=cid,
+        )
+        monologue_state = self.monologue_store.get(
+            chat_session_id=chat_session_id, companion_id=cid,
+        )
         return KnowledgeResponse(
             chat_session_id=chat_session_id,
+            companion_id=cid,
             facts=facts,
             graph=graph,
             monologue=monologue_state.internal_monologue if monologue_state else None,
@@ -1060,7 +1223,7 @@ class AppContainer:
     seed_store: SeedContextStore
     vector_store: VectorStore
     graph_store: GraphStore
-    monologue_store: InMemoryMonologueStore | PostgresMonologueStore
+    monologue_store: MonologueStore
     agent_dispatcher: BackgroundAgentDispatcher
     debug_store: DebugTraceStore
     orchestrator: CognitiveOrchestrator
@@ -1116,7 +1279,7 @@ def build_container(settings: Settings) -> AppContainer:
         episodic_store, vector_store, graph_store, seed_store = (
             _external_stores_from_settings(settings, embedder)
         )
-        monologue_store: InMemoryMonologueStore | PostgresMonologueStore = (
+        monologue_store: MonologueStore = (
             PostgresMonologueStore(dsn=settings.postgres_dsn)
         )
     else:

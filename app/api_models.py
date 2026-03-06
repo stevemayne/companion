@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     chat_session_id: UUID
+    companion_id: UUID | None = None
     assistant_message: Message
     affect: CompanionAffect | None = None
     idempotency_replay: bool = False
@@ -42,6 +43,7 @@ class MemoryResponse(BaseModel):
 
 class KnowledgeResponse(BaseModel):
     chat_session_id: UUID
+    companion_id: UUID | None = None
     facts: list[MemoryItem]
     graph: list[GraphRelation]
     monologue: str | None = None

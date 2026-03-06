@@ -14,6 +14,8 @@ class Message(BaseModel):
     chat_session_id: UUID
     message_id: UUID = Field(default_factory=uuid4)
     role: Role
+    speaker_id: UUID | None = None
+    speaker_name: str | None = None
     content: str = Field(min_length=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -33,6 +35,7 @@ class MemoryStatus(StrEnum):
 
 class MemoryItem(BaseModel):
     chat_session_id: UUID
+    companion_id: UUID | None = None
     memory_id: UUID = Field(default_factory=uuid4)
     kind: MemoryKind
     content: str = Field(min_length=1)
@@ -54,6 +57,7 @@ class Entity(BaseModel):
 
 class GraphRelation(BaseModel):
     chat_session_id: UUID
+    companion_id: UUID | None = None
     source: str = Field(min_length=1)
     relation: str = Field(min_length=1)
     target: str = Field(min_length=1)
@@ -77,6 +81,7 @@ class CompanionAffect(BaseModel):
 
 class MonologueState(BaseModel):
     chat_session_id: UUID
+    companion_id: UUID | None = None
     internal_monologue: str = Field(default="")
     affect: CompanionAffect = Field(default_factory=CompanionAffect)
     user_state: list[str] = Field(default_factory=list)
@@ -93,6 +98,7 @@ class CompanionSeed(BaseModel):
 
 class SessionSeedContext(BaseModel):
     chat_session_id: UUID
+    companion_id: UUID = Field(default_factory=uuid4)
     version: int = Field(default=1, ge=1)
     seed: CompanionSeed
     user_description: str | None = None

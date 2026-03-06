@@ -31,7 +31,7 @@ from app.observability import (
     metrics_payload,
 )
 from app.safety import contains_prompt_injection, redact_pii
-from app.schemas import SessionSeedContext
+from app.schemas import CompanionSeed, SessionSeedContext
 from app.services import AppContainer, build_container
 
 
@@ -321,9 +321,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response_model=KnowledgeResponse,
         responses={422: {"model": ApiErrorResponse}},
     )
-    def get_knowledge(chat_session_id: UUID, request: Request) -> KnowledgeResponse:
+    def get_knowledge(
+        chat_session_id: UUID, request: Request, companion_id: UUID | None = None,
+    ) -> KnowledgeResponse:
         container = get_container(request)
-        return container.chat_service.get_knowledge(chat_session_id=chat_session_id)
+        return container.chat_service.get_knowledge(
+            chat_session_id=chat_session_id, companion_id=companion_id,
+        )
 
     @app.get(
         "/v1/debug/{chat_session_id}",
@@ -437,6 +441,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Seed context not found.",
+            )
+        return seed_context
+
+    @app.get(
+        "/v1/sessions/{chat_session_id}/companions",
+        response_model=list[SessionSeedContext],
+        responses={422: {"model": ApiErrorResponse}},
+    )
+    def list_companions(chat_session_id: UUID, request: Request) -> list[SessionSeedContext]:
+        container = get_container(request)
+        return container.seed_store.list_for_session(
+            chat_session_id=chat_session_id,
+        )
+
+    @app.get(
+        "/v1/sessions/{chat_session_id}/companions/{companion_id}/seed",
+        response_model=SessionSeedContext,
+        responses={404: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
+    )
+    def get_companion_seed(
+        chat_session_id: UUID, companion_id: UUID, request: Request,
+    ) -> SessionSeedContext:
+        container = get_container(request)
+        seed_context = container.seed_store.get(
+            chat_session_id=chat_session_id, companion_id=companion_id,
+        )
+        if seed_context is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Companion seed not found.",
             )
         return seed_context
 

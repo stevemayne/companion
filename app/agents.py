@@ -41,7 +41,9 @@ class EpisodicStore(Protocol):
 class VectorStore(Protocol):
     def upsert_memory(self, item: MemoryItem) -> None: ...
 
-    def list_memories(self, *, chat_session_id: UUID) -> list[MemoryItem]: ...
+    def list_memories(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> list[MemoryItem]: ...
 
     def update_memory(
         self, *, memory_id: UUID, importance: float | None = None,
@@ -54,7 +56,9 @@ class GraphStore(Protocol):
 
 
 class MonologueStore(Protocol):
-    def get(self, *, chat_session_id: UUID) -> MonologueState | None: ...
+    def get(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> MonologueState | None: ...
 
     def upsert(self, state: MonologueState) -> MonologueState: ...
 
@@ -118,6 +122,7 @@ class BackgroundAgentDispatcher:
         user_message: str,
         assistant_message: str,
         companion_name: str | None = None,
+        companion_id: UUID | None = None,
     ) -> None:
         if not self._enabled:
             return
@@ -127,15 +132,16 @@ class BackgroundAgentDispatcher:
             user_message,
             assistant_message,
             companion_name,
+            companion_id,
         )
-        self._submit(self._run_reflector, chat_session_id)
+        self._submit(self._run_reflector, chat_session_id, companion_id)
 
         if self._consolidation_agent is not None:
             with self._lock:
                 count = self._turn_counts.get(chat_session_id, 0) + 1
                 self._turn_counts[chat_session_id] = count
             if count % self._consolidation_interval == 0:
-                self._submit(self._run_consolidation, chat_session_id)
+                self._submit(self._run_consolidation, chat_session_id, companion_id)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)
@@ -161,6 +167,7 @@ class BackgroundAgentDispatcher:
         user_message: str,
         assistant_message: str,
         companion_name: str | None,
+        companion_id: UUID | None = None,
     ) -> None:
         try:
             outcome = self._fact_extractor.extract(
@@ -173,6 +180,7 @@ class BackgroundAgentDispatcher:
                 self._vector_store.upsert_memory(
                     MemoryItem(
                         chat_session_id=chat_session_id,
+                        companion_id=companion_id,
                         kind=MemoryKind.SEMANTIC,
                         content=fact.text,
                         importance=fact.importance,
@@ -184,6 +192,7 @@ class BackgroundAgentDispatcher:
                     self._graph_store.upsert_relation(
                         GraphRelation(
                             chat_session_id=chat_session_id,
+                            companion_id=companion_id,
                             source=em.owner,
                             relation=f"HAS_{em.relationship.upper().replace(' ', '_')}",
                             target=em.name,
@@ -193,6 +202,7 @@ class BackgroundAgentDispatcher:
                         self._graph_store.upsert_relation(
                             GraphRelation(
                                 chat_session_id=chat_session_id,
+                                companion_id=companion_id,
                                 source=em.name,
                                 relation="ALSO_KNOWN_AS",
                                 target=alias,
@@ -203,6 +213,7 @@ class BackgroundAgentDispatcher:
                 self._vector_store.upsert_memory(
                     MemoryItem(
                         chat_session_id=chat_session_id,
+                        companion_id=companion_id,
                         kind=MemoryKind.COMPANION,
                         content=fact.text,
                         importance=fact.importance,
@@ -241,10 +252,13 @@ class BackgroundAgentDispatcher:
         except Exception:
             self._increment(chat_session_id=chat_session_id, failures=1)
 
-    def _run_reflector(self, chat_session_id: UUID) -> None:
+    def _run_reflector(
+        self, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> None:
         try:
             current = self._monologue_store.get(
                 chat_session_id=chat_session_id,
+                companion_id=companion_id,
             )
             current_affect = (
                 current.affect if current is not None else CompanionAffect()
@@ -277,6 +291,7 @@ class BackgroundAgentDispatcher:
             self._monologue_store.upsert(
                 MonologueState(
                     chat_session_id=chat_session_id,
+                    companion_id=companion_id,
                     internal_monologue=current_monologue,
                     affect=refined_affect,
                     user_state=refined_user_state,
@@ -290,7 +305,9 @@ class BackgroundAgentDispatcher:
                 chat_session_id=chat_session_id, failures=1,
             )
 
-    def _run_consolidation(self, chat_session_id: UUID) -> None:
+    def _run_consolidation(
+        self, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> None:
         assert self._consolidation_agent is not None
         try:
             messages = self._episodic_store.get_recent_messages(
@@ -300,6 +317,7 @@ class BackgroundAgentDispatcher:
             existing = [
                 m for m in self._vector_store.list_memories(
                     chat_session_id=chat_session_id,
+                    companion_id=companion_id,
                 )
                 if m.kind != MemoryKind.COMPANION
             ]
@@ -322,6 +340,7 @@ class BackgroundAgentDispatcher:
                 if s.replacement_text:
                     self._vector_store.upsert_memory(MemoryItem(
                         chat_session_id=chat_session_id,
+                        companion_id=companion_id,
                         kind=MemoryKind.REFLECTIVE,
                         content=s.replacement_text,
                         importance=0.6,
@@ -329,6 +348,7 @@ class BackgroundAgentDispatcher:
             for nf in result.new_facts:
                 self._vector_store.upsert_memory(MemoryItem(
                     chat_session_id=chat_session_id,
+                    companion_id=companion_id,
                     kind=MemoryKind.REFLECTIVE,
                     content=nf.text,
                     importance=nf.importance,

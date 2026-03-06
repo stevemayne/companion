@@ -1,6 +1,7 @@
 export type MemoryFact = {
   memory_id: string;
   chat_session_id: string;
+  companion_id: string | null;
   kind: string;
   content: string;
   score: number | null;
@@ -9,6 +10,7 @@ export type MemoryFact = {
 
 export type GraphRelation = {
   chat_session_id: string;
+  companion_id: string | null;
   source: string;
   relation: string;
   target: string;
@@ -32,6 +34,7 @@ export type CompanionAffect = {
 
 export type KnowledgeResponse = {
   chat_session_id: string;
+  companion_id: string | null;
   facts: MemoryFact[];
   graph: GraphRelation[];
   monologue: string | null;
