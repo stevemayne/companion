@@ -559,7 +559,7 @@ _LEAKED_STATE_PATTERNS = [
     ),
     # Session context section headers that leaked into prose:
     re.compile(
-        r"##\s*(?:Your Inner Emotional State|Session Context|"
+        r"#{2,}\s*(?:Your Inner Emotional State|Session Context|"
         r"Your Recent Responses|User's Described State|"
         r"Anti-Repetition|Conversational Flow)[^\n]*",
         re.IGNORECASE,
@@ -573,6 +573,24 @@ _LEAKED_STATE_PATTERNS = [
     re.compile(
         r"^\n*(?:Emotional state|Current mood|Internal(?: state)?|Affect"
         r"|Inner state)\s*:[^\n]*\d+[\s\S]*$",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    # Affect block leaked as multi-line dump starting with "Current mood:"
+    # followed by metric lines. Captures from "Current mood:" to end.
+    re.compile(
+        r"\n*Current mood:[\s\S]*$",
+        re.IGNORECASE,
+    ),
+    # Standalone metric lines: "Emotional valence: ...", "Arousal: ..."
+    re.compile(
+        r"^\s*(?:Emotional valence|Arousal|Comfort with user|Trust in user"
+        r"|Attraction|Engagement|Shyness|Patience|Curiosity|Vulnerability)"
+        r"\s*:.*$",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    # Orphaned parenthetical descriptors from truncated affect block
+    re.compile(
+        r"^\s*\((?:high=|low=|negative=|positive=|willingness).*\)\s*$",
         re.IGNORECASE | re.MULTILINE,
     ),
 ]
@@ -740,11 +758,16 @@ def _build_affect_block(affect: CompanionAffect) -> str:
             "give shorter answers, and avoid revealing too much."
         )
 
-    # High curiosity = exploratory
-    if affect.curiosity >= 7.0 and affect.arousal < 0.7:
+    # High curiosity = exploratory (but not question-driven during scenes)
+    if affect.curiosity >= 7.0 and affect.arousal < 0.5:
         directives.append(
-            "Your curiosity is high — ask follow-up questions and "
-            "explore what interests you."
+            "Your curiosity is high — explore what interests you, "
+            "ask genuine follow-up questions."
+        )
+    elif affect.curiosity >= 7.0:
+        directives.append(
+            "Your curiosity is high — explore and savour what's "
+            "happening to you rather than asking questions about it."
         )
 
     # High engagement = deeply absorbed
@@ -853,6 +876,8 @@ class CognitiveOrchestrator:
             response=response,
             companion=companion,
         )
+        response = _strip_leaked_state(response)
+        response = _strip_trailing_artifacts(response)
         if not response:
             logger.warning("Empty response from model, using fallback")
             response = "*nods quietly*"
