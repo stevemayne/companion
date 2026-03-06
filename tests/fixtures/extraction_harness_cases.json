@@ -1,0 +1,294 @@
+[
+  {
+    "name": "invention_basic",
+    "user_message": "I've been working on a new invention - a portable water purifier that uses UV light.",
+    "assistant_message": "That sounds amazing! What inspired you to work on this project?",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "water purifier",
+        "subject": "User",
+        "kind": "user"
+      },
+      {
+        "text_contains": "UV light",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "portable water purifier",
+        "relationship": "invention",
+        "owner": "User"
+      }
+    ],
+    "forbidden": [],
+    "notes": "Basic invention extraction"
+  },
+  {
+    "name": "sister_emma",
+    "user_message": "I bumped into my sister Emma today. She's visiting from Portland next weekend.",
+    "assistant_message": "That's great news! We should plan something fun.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "sister",
+        "subject": "User",
+        "kind": "user"
+      },
+      {
+        "text_contains": "Portland",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "Emma",
+        "relationship": "sister",
+        "owner": "User"
+      }
+    ],
+    "forbidden": [
+      {
+        "field": "entity_name",
+        "contains": "Sarah"
+      },
+      {
+        "field": "entity_name",
+        "contains": "Chloe"
+      }
+    ],
+    "notes": "Entity name accuracy \u2014 must extract 'Emma' not any other name"
+  },
+  {
+    "name": "research_not_disease",
+    "user_message": "How's your research going? Are you still working on that protein folding project?",
+    "assistant_message": "Yes! The protein stuff is fascinating. Understanding how proteins misfold can help with diseases like Alzheimer's.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "protein folding",
+        "subject": "Chloe",
+        "kind": "companion"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "protein folding",
+        "relationship": "research",
+        "owner": "Chloe"
+      }
+    ],
+    "forbidden": [
+      {
+        "field": "relation",
+        "contains": "disease"
+      },
+      {
+        "field": "fact_text",
+        "contains": "User has Alzheimer"
+      },
+      {
+        "field": "fact_text",
+        "contains": "User suffers"
+      }
+    ],
+    "notes": "Research topic should not be classified as a disease the user has"
+  },
+  {
+    "name": "business_partner_tom",
+    "user_message": "My business partner Tom thinks we should pivot to a different design. I'm not sure I agree.",
+    "assistant_message": "That's tough. What are his reasons for wanting to change?",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "Tom",
+        "subject": "User",
+        "kind": "user"
+      },
+      {
+        "text_contains": "pivot",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "Tom",
+        "relationship": "business partner",
+        "owner": "User"
+      }
+    ],
+    "forbidden": [],
+    "notes": "Relationship type should be business_partner, not just friend or person"
+  },
+  {
+    "name": "mothers_name_and_city",
+    "user_message": "My mum called today - she's been asking about you. Her name's Margaret. She made that amazing roast last time we visited in Edinburgh.",
+    "assistant_message": "I'd love to visit her again! That roast was incredible.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "Margaret",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "Margaret",
+        "relationship": "mother",
+        "owner": "User"
+      }
+    ],
+    "forbidden": [
+      {
+        "field": "relation",
+        "contains": "home"
+      },
+      {
+        "field": "fact_text",
+        "contains": "User lives in Edinburgh"
+      }
+    ],
+    "notes": "Edinburgh is where mum lives, not the user. Margaret is the mum's name."
+  },
+  {
+    "name": "pet_and_allergy",
+    "user_message": "Emma's bringing her dog Rex. Hope you don't mind - I know you're allergic to cats but dogs are fine, right?",
+    "assistant_message": "Of course! Dogs are great and Rex is such a sweetie.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "allergic to cats",
+        "subject": "Chloe",
+        "kind": "companion"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "Rex",
+        "relationship": "pet",
+        "owner": "Emma"
+      }
+    ],
+    "forbidden": [
+      {
+        "field": "fact_text",
+        "contains": "User is allergic to dogs"
+      },
+      {
+        "field": "fact_text",
+        "contains": "User is allergic to cats"
+      }
+    ],
+    "notes": "Chloe is allergic to cats (not dogs). Rex is Emma's dog, not User's."
+  },
+  {
+    "name": "travel_plan",
+    "user_message": "I've been thinking about taking a trip to Japan in the fall. I'd love to see Kyoto and Tokyo.",
+    "assistant_message": "Japan sounds amazing! I've always wanted to visit.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "Japan",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "Japan",
+        "relationship": "travel destination",
+        "owner": "User"
+      }
+    ],
+    "forbidden": [],
+    "notes": "Travel plan extraction with place entities"
+  },
+  {
+    "name": "companion_self_fact",
+    "user_message": "What do you like to cook?",
+    "assistant_message": "I absolutely love making pasta from scratch! There's something so satisfying about kneading the dough. I also enjoy baking \u2014 my chocolate souffl\u00e9 is getting pretty good.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "pasta",
+        "subject": "Chloe",
+        "kind": "companion"
+      }
+    ],
+    "expected_entities": [],
+    "forbidden": [
+      {
+        "field": "fact_text",
+        "contains": "User loves pasta"
+      },
+      {
+        "field": "fact_text",
+        "contains": "User enjoys baking"
+      }
+    ],
+    "notes": "Companion self-facts should be attributed to Chloe, not User"
+  },
+  {
+    "name": "no_extraction_from_greeting",
+    "user_message": "Hey, how's it going?",
+    "assistant_message": "I'm doing great, thanks for asking! How was your day?",
+    "companion_name": "Chloe",
+    "expected_facts": [],
+    "expected_entities": [],
+    "forbidden": [],
+    "notes": "Greetings should produce no facts or entities"
+  },
+  {
+    "name": "stressed_about_deadline",
+    "user_message": "I'm feeling a bit stressed about a deadline. The prototype needs to be ready for a demo next Friday.",
+    "assistant_message": "I'm sorry to hear that. Is there anything I can do to help?",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "stressed",
+        "subject": "User",
+        "kind": "user"
+      },
+      {
+        "text_contains": "prototype",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [],
+    "forbidden": [
+      {
+        "field": "fact_text",
+        "contains": "Chloe is stressed"
+      }
+    ],
+    "notes": "Emotional state and deadline should be attributed to User"
+  },
+  {
+    "name": "camping_memory",
+    "user_message": "I actually got the idea while we were camping at Lake Tahoe last summer. Remember the dodgy water?",
+    "assistant_message": "Oh right, I do remember that! We had to boil all our drinking water.",
+    "companion_name": "Chloe",
+    "expected_facts": [
+      {
+        "text_contains": "Lake Tahoe",
+        "subject": "User",
+        "kind": "user"
+      }
+    ],
+    "expected_entities": [
+      {
+        "name": "Lake Tahoe",
+        "relationship": "location",
+        "owner": "User"
+      }
+    ],
+    "forbidden": [],
+    "notes": "Shared memory with place extraction"
+  }
+]

@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     analysis_model: str | None = None
     analysis_base_url: str | None = None
     analysis_api_key: str | None = None
-    analysis_timeout_seconds: float = 8.0
+    analysis_timeout_seconds: float = 30.0
     analysis_max_retries: int = 1
 
     adaptive_retrieval: bool = False

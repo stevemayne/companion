@@ -7,7 +7,7 @@ import urllib.request
 import urllib.error
 
 BASE = "http://localhost:8000"
-SESSION = "1442ccf0-b376-4994-b834-fd79e231ae0d"
+SESSION = "0e9f4f4f-b362-4908-a773-bb6e1f49ee92"
 
 MESSAGES = [
     "I've been working on a new invention - a portable water purifier that uses UV light. It's going to be really compact.",

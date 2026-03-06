@@ -112,18 +112,35 @@ def test_parse_state_response_valid_json() -> None:
         '"user_state": ["wearing a smart suit", "sitting on the couch"]}'
     )
     fallback_affect = CompanionAffect()
-    affect, user_state = _parse_state_response(
+    affect, user_state, monologue = _parse_state_response(
         raw, fallback_affect=fallback_affect, fallback_user_state=[],
     )
     assert affect.mood == "fond"
     assert affect.trust == 4.0
     assert user_state == ["wearing a smart suit", "sitting on the couch"]
+    assert monologue == ""
+
+
+def test_parse_state_response_with_monologue() -> None:
+    raw = (
+        '{"mood": "fond", "valence": 0.4, "arousal": 0.3, '
+        '"comfort_level": 5.0, "trust": 4.0, "attraction": 3.0, '
+        '"engagement": 6.0, "shyness": 5.0, "patience": 7.0, '
+        '"curiosity": 6.0, "vulnerability": 3.0, '
+        '"recent_triggers": ["warm conversation"], '
+        '"user_state": ["sitting on the couch"], '
+        '"internal_monologue": "I feel really connected right now."}'
+    )
+    _, _, monologue = _parse_state_response(
+        raw, fallback_affect=CompanionAffect(), fallback_user_state=[],
+    )
+    assert monologue == "I feel really connected right now."
 
 
 def test_parse_state_response_missing_user_state_uses_fallback() -> None:
     raw = '{"mood": "curious", "valence": 0.1}'
     fallback_state = ["wearing a hat"]
-    affect, user_state = _parse_state_response(
+    affect, user_state, _ = _parse_state_response(
         raw,
         fallback_affect=CompanionAffect(),
         fallback_user_state=fallback_state,
@@ -135,7 +152,7 @@ def test_parse_state_response_missing_user_state_uses_fallback() -> None:
 def test_parse_state_response_invalid_json_uses_fallbacks() -> None:
     raw = "not json"
     fallback_affect = CompanionAffect(mood="wary")
-    affect, user_state = _parse_state_response(
+    affect, user_state, _ = _parse_state_response(
         raw,
         fallback_affect=fallback_affect,
         fallback_user_state=["old state"],
@@ -148,7 +165,7 @@ def test_parse_state_response_caps_user_state_at_8() -> None:
     import json
     entries = [f"state {i}" for i in range(12)]
     raw = json.dumps({"mood": "curious", "valence": 0.1, "user_state": entries})
-    _, user_state = _parse_state_response(
+    _, user_state, _ = _parse_state_response(
         raw, fallback_affect=CompanionAffect(), fallback_user_state=[],
     )
     assert len(user_state) == 8

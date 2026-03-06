@@ -194,7 +194,7 @@ class BackgroundAgentDispatcher:
                             chat_session_id=chat_session_id,
                             companion_id=companion_id,
                             source=em.owner,
-                            relation=f"HAS_{em.relationship.upper().replace(' ', '_')}",
+                            relation=em.relationship.upper().replace(' ', '_'),
                             target=em.name,
                         )
                     )
@@ -272,6 +272,7 @@ class BackgroundAgentDispatcher:
 
             refined_affect = current_affect
             refined_user_state = current_user_state
+            refined_monologue = current_monologue
 
             if self._affect_refiner is not None:
                 recent = self._episodic_store.get_recent_messages(
@@ -279,7 +280,7 @@ class BackgroundAgentDispatcher:
                     limit=6,
                 )
                 if recent:
-                    refined_affect, refined_user_state = (
+                    refined_affect, refined_user_state, refined_monologue = (
                         self._llm_refine_state(
                             chat_session_id=chat_session_id,
                             recent_messages=recent,
@@ -292,7 +293,7 @@ class BackgroundAgentDispatcher:
                 MonologueState(
                     chat_session_id=chat_session_id,
                     companion_id=companion_id,
-                    internal_monologue=current_monologue,
+                    internal_monologue=refined_monologue,
                     affect=refined_affect,
                     user_state=refined_user_state,
                 )
@@ -383,8 +384,8 @@ class BackgroundAgentDispatcher:
         recent_messages: list[Message],
         current_affect: CompanionAffect,
         current_user_state: list[str],
-    ) -> tuple[CompanionAffect, list[str]]:
-        """Call the analysis LLM to refine affect and extract user state."""
+    ) -> tuple[CompanionAffect, list[str], str]:
+        """Call the analysis LLM to refine affect, user state, and monologue."""
         conversation_excerpt = "\n".join(
             f"{msg.role.upper()}: {msg.content}"
             for msg in recent_messages[-6:]
@@ -394,8 +395,9 @@ class BackgroundAgentDispatcher:
         prompt = (
             "You are an affect-state analyser for a companion AI. "
             "Given the recent conversation and the companion's current "
-            "internal state, return a revised affect state and the "
-            "user's current physical state as strict JSON.\n\n"
+            "internal state, return a revised affect state, the "
+            "user's current physical state, and an internal monologue "
+            "as strict JSON.\n\n"
             "## Current companion affect\n"
             f"{current_json}\n\n"
             "## Current user state\n"
@@ -424,7 +426,12 @@ class BackgroundAgentDispatcher:
             "the user's current physical state, appearance, clothing, "
             "actions, or location — extracted from the USER's messages "
             "only. Merge with the existing state: keep still-relevant "
-            "entries, drop outdated ones, add new observations.)\n\n"
+            "entries, drop outdated ones, add new observations.)\n"
+            "  internal_monologue (string — 1-3 sentences of the "
+            "companion's private inner thoughts about the conversation "
+            "right now. What are they feeling? What are they noticing "
+            "about the user? What are they thinking about? Write in "
+            "first person as the companion.)\n\n"
             "Adjust affect values modestly — this is a refinement, "
             "not a reset. Return only JSON, no explanation."
         )
@@ -483,8 +490,8 @@ def _parse_state_response(
     *,
     fallback_affect: CompanionAffect,
     fallback_user_state: list[str],
-) -> tuple[CompanionAffect, list[str]]:
-    """Parse LLM state response containing affect + user_state."""
+) -> tuple[CompanionAffect, list[str], str]:
+    """Parse LLM state response containing affect + user_state + monologue."""
     candidate = raw.strip()
     fenced = re.search(
         r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.DOTALL,
@@ -499,10 +506,10 @@ def _parse_state_response(
     try:
         data = json.loads(candidate)
     except Exception:
-        return fallback_affect, fallback_user_state
+        return fallback_affect, fallback_user_state, ""
 
-    # Extract user_state before validating affect (which would reject
-    # the extra key).
+    # Extract user_state and internal_monologue before validating affect
+    # (which would reject extra keys).
     raw_user_state = data.pop("user_state", None)
     user_state = fallback_user_state
     if isinstance(raw_user_state, list):
@@ -511,10 +518,12 @@ def _parse_state_response(
             if isinstance(s, str) and str(s).strip()
         ][:8]
 
+    monologue = str(data.pop("internal_monologue", "")).strip()
+
     try:
         affect = CompanionAffect.model_validate(data)
     except Exception:
         affect = fallback_affect
 
-    return affect, user_state
+    return affect, user_state, monologue
 

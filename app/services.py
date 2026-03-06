@@ -968,30 +968,35 @@ class CognitiveOrchestrator:
         self, *, message: Message, preprocess: PreprocessResult,
         companion: CompanionContext | None = None,
     ) -> dict[str, Any]:
-        reflection = (
-            f"Focus on a {preprocess.emotion} user; "
-            f"intent={preprocess.intent}; "
-            f"entities={','.join(preprocess.entities) or 'none'}"
-        )
         if companion is not None:
             current_state = companion.monologue.get()
         else:
             current_state = self.monologue_store.get(
                 chat_session_id=message.chat_session_id,
             )
-        # Preserve current affect and user_state — the background LLM
-        # reflector updates both asynchronously after each turn.
+        # Preserve current affect, user_state, and monologue — the
+        # background LLM reflector updates all three asynchronously.
+        # Only use the template if there's no existing monologue yet.
         current_affect = (
             current_state.affect if current_state is not None else CompanionAffect()
         )
         user_state = (
             current_state.user_state if current_state is not None else []
         )
+        current_monologue = (
+            current_state.internal_monologue if current_state is not None else ""
+        )
+        if not current_monologue:
+            current_monologue = (
+                f"Focus on a {preprocess.emotion} user; "
+                f"intent={preprocess.intent}; "
+                f"entities={','.join(preprocess.entities) or 'none'}"
+            )
 
         monologue_state = MonologueState(
             chat_session_id=message.chat_session_id,
             companion_id=companion.companion_id if companion else None,
-            internal_monologue=reflection,
+            internal_monologue=current_monologue,
             affect=current_affect,
             user_state=user_state,
         )
