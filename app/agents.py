@@ -14,6 +14,7 @@ from app.analysis import ExtractionOutcome
 from app.consolidation import ConsolidationAgent
 from app.debug_trace import DebugTraceStore, build_trace_base
 from app.schemas import (
+    CharacterState,
     CompanionAffect,
     GraphRelation,
     MemoryItem,
@@ -21,6 +22,7 @@ from app.schemas import (
     MemoryStatus,
     Message,
     MonologueState,
+    WorldState,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,12 +268,12 @@ class BackgroundAgentDispatcher:
             current_monologue = (
                 current.internal_monologue if current is not None else ""
             )
-            current_user_state = (
-                current.user_state if current is not None else []
+            current_world = (
+                current.world if current is not None else WorldState()
             )
 
             refined_affect = current_affect
-            refined_user_state = current_user_state
+            refined_world = current_world
             refined_monologue = current_monologue
 
             if self._affect_refiner is not None:
@@ -280,12 +282,12 @@ class BackgroundAgentDispatcher:
                     limit=6,
                 )
                 if recent:
-                    refined_affect, refined_user_state, refined_monologue = (
+                    refined_affect, refined_world, refined_monologue = (
                         self._llm_refine_state(
                             chat_session_id=chat_session_id,
                             recent_messages=recent,
                             current_affect=current_affect,
-                            current_user_state=current_user_state,
+                            current_world=current_world,
                         )
                     )
 
@@ -295,7 +297,7 @@ class BackgroundAgentDispatcher:
                     companion_id=companion_id,
                     internal_monologue=refined_monologue,
                     affect=refined_affect,
-                    user_state=refined_user_state,
+                    world=refined_world,
                 )
             )
             self._increment(
@@ -383,25 +385,25 @@ class BackgroundAgentDispatcher:
         chat_session_id: UUID,
         recent_messages: list[Message],
         current_affect: CompanionAffect,
-        current_user_state: list[str],
-    ) -> tuple[CompanionAffect, list[str], str]:
-        """Call the analysis LLM to refine affect, user state, and monologue."""
+        current_world: WorldState,
+    ) -> tuple[CompanionAffect, WorldState, str]:
+        """Call the analysis LLM to refine affect, world state, and monologue."""
         conversation_excerpt = "\n".join(
             f"{msg.role.upper()}: {msg.content}"
             for msg in recent_messages[-6:]
         )
         current_json = current_affect.model_dump_json()
-        state_json = json.dumps(current_user_state)
+        world_json = current_world.model_dump_json()
         prompt = (
             "You are an affect-state analyser for a companion AI. "
             "Given the recent conversation and the companion's current "
-            "internal state, return a revised affect state, the "
-            "user's current physical state, and an internal monologue "
-            "as strict JSON.\n\n"
+            "internal state, return a revised affect state, the companion's "
+            "perception of the scene (world state), and an internal "
+            "monologue as strict JSON.\n\n"
             "## Current companion affect\n"
             f"{current_json}\n\n"
-            "## Current user state\n"
-            f"{state_json}\n\n"
+            "## Current world state (companion's perception)\n"
+            f"{world_json}\n\n"
             "## Recent conversation\n"
             f"{conversation_excerpt}\n\n"
             "## Output format\n"
@@ -422,16 +424,31 @@ class BackgroundAgentDispatcher:
             "deeper feelings)\n"
             "  recent_triggers (list of up to 3 short strings explaining "
             "what changed)\n"
-            "  user_state (list of up to 8 short strings describing "
-            "the user's current physical state, appearance, clothing, "
-            "actions, or location — extracted from the USER's messages "
-            "only. Merge with the existing state: keep still-relevant "
-            "entries, drop outdated ones, add new observations.)\n"
+            "  world (object — the companion's updated perception of "
+            "the scene. Include these sub-keys:)\n"
+            "    self_state (object — the companion's own physical state:)\n"
+            "      clothing (string or null)\n"
+            "      location (string or null)\n"
+            "      activity (string or null)\n"
+            "      position (string or null)\n"
+            "      appearance (list of strings — notable temporary features)\n"
+            "      mood_apparent (string or null — how they appear outwardly)\n"
+            "    user_state (object — the user's physical state as the "
+            "companion perceives it, same fields as self_state)\n"
+            "    other_characters (object — map of name to state for any "
+            "other characters present in the scene, same fields)\n"
+            "    environment (string or null — setting/scene description)\n"
+            "    time_of_day (string or null)\n"
+            "    recent_events (list of up to 5 short strings — notable "
+            "things that happened recently in the scene)\n"
+            "  Update the world state based on the conversation. "
+            "If someone changes clothes, update their clothing and drop "
+            "the old value. If someone moves, update their location. "
+            "Only include what the companion would know from the "
+            "conversation. Set fields to null if unknown.\n"
             "  internal_monologue (string — 1-3 sentences of the "
             "companion's private inner thoughts about the conversation "
-            "right now. What are they feeling? What are they noticing "
-            "about the user? What are they thinking about? Write in "
-            "first person as the companion.)\n\n"
+            "right now. Write in first person as the companion.)\n\n"
             "Adjust affect values modestly — this is a refinement, "
             "not a reset. Return only JSON, no explanation."
         )
@@ -443,7 +460,7 @@ class BackgroundAgentDispatcher:
         return _parse_state_response(
             raw,
             fallback_affect=current_affect,
-            fallback_user_state=current_user_state,
+            fallback_world=current_world,
         )
 
     def _increment(
@@ -489,9 +506,13 @@ def _parse_state_response(
     raw: str,
     *,
     fallback_affect: CompanionAffect,
-    fallback_user_state: list[str],
-) -> tuple[CompanionAffect, list[str], str]:
-    """Parse LLM state response containing affect + user_state + monologue."""
+    fallback_world: WorldState | None = None,
+    # Legacy — kept for backward compat with tests
+    fallback_user_state: list[str] | None = None,
+) -> tuple[CompanionAffect, WorldState, str]:
+    """Parse LLM state response containing affect + world state + monologue."""
+    effective_world = fallback_world or WorldState()
+
     candidate = raw.strip()
     fenced = re.search(
         r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.DOTALL,
@@ -506,24 +527,39 @@ def _parse_state_response(
     try:
         data = json.loads(candidate)
     except Exception:
-        return fallback_affect, fallback_user_state, ""
+        return fallback_affect, effective_world, ""
 
-    # Extract user_state and internal_monologue before validating affect
-    # (which would reject extra keys).
+    # Extract world, user_state (legacy), and internal_monologue before
+    # validating affect (which would reject extra keys).
+    raw_world = data.pop("world", None)
     raw_user_state = data.pop("user_state", None)
-    user_state = fallback_user_state
-    if isinstance(raw_user_state, list):
-        user_state = [
+    monologue = str(data.pop("internal_monologue", "")).strip()
+
+    # Parse structured world state
+    world = effective_world
+    if isinstance(raw_world, dict):
+        try:
+            world = WorldState.model_validate(raw_world)
+        except Exception:
+            logger.warning(
+                "Failed to parse world state from LLM response: %s",
+                raw_world,
+                exc_info=True,
+            )
+    elif isinstance(raw_user_state, list):
+        # Legacy fallback: convert flat user_state list to WorldState
+        user_items = [
             str(s).strip() for s in raw_user_state
             if isinstance(s, str) and str(s).strip()
         ][:8]
-
-    monologue = str(data.pop("internal_monologue", "")).strip()
+        world = effective_world.model_copy(update={
+            "user_state": CharacterState(appearance=user_items),
+        })
 
     try:
         affect = CompanionAffect.model_validate(data)
     except Exception:
         affect = fallback_affect
 
-    return affect, user_state, monologue
+    return affect, world, monologue
 

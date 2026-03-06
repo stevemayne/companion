@@ -32,6 +32,24 @@ export type CompanionAffect = {
   recent_triggers: string[];
 };
 
+export type CharacterState = {
+  clothing: string | null;
+  location: string | null;
+  activity: string | null;
+  position: string | null;
+  appearance: string[];
+  mood_apparent: string | null;
+};
+
+export type WorldState = {
+  self_state: CharacterState;
+  user_state: CharacterState;
+  other_characters: Record<string, CharacterState>;
+  environment: string | null;
+  time_of_day: string | null;
+  recent_events: string[];
+};
+
 export type KnowledgeResponse = {
   chat_session_id: string;
   companion_id: string | null;
@@ -39,6 +57,7 @@ export type KnowledgeResponse = {
   graph: GraphRelation[];
   monologue: string | null;
   affect: CompanionAffect | null;
+  world: WorldState | null;
 };
 
 export async function fetchKnowledge(chatSessionId: string): Promise<KnowledgeResponse> {

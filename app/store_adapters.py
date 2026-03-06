@@ -25,6 +25,7 @@ from app.schemas import (
     MonologueState,
     SessionActivity,
     SessionSeedContext,
+    WorldState,
 )
 
 
@@ -136,7 +137,7 @@ class PostgresMonologueStore:
                 cur.execute(
                     """
                     SELECT chat_session_id, companion_id, internal_monologue,
-                           affect, user_state, updated_at
+                           affect, user_state, updated_at, world
                     FROM monologue_states
                     WHERE chat_session_id = %s AND companion_id = %s
                     """,
@@ -149,12 +150,15 @@ class PostgresMonologueStore:
         affect = CompanionAffect.model_validate(affect_raw if affect_raw else {})
         user_state_raw = row[4]
         user_state = user_state_raw if isinstance(user_state_raw, list) else []
+        world_raw = row[6]
+        world = WorldState.model_validate(world_raw) if isinstance(world_raw, dict) and world_raw else WorldState()
         return MonologueState(
             chat_session_id=row[0],
             companion_id=row[1],
             internal_monologue=row[2],
             affect=affect,
             user_state=user_state,
+            world=world,
             updated_at=row[5],
         )
 
@@ -174,13 +178,15 @@ class PostgresMonologueStore:
                       internal_monologue,
                       affect,
                       user_state,
+                      world,
                       updated_at
-                    ) VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    ) VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
                     ON CONFLICT (chat_session_id, companion_id)
                     DO UPDATE SET
                       internal_monologue = EXCLUDED.internal_monologue,
                       affect = EXCLUDED.affect,
                       user_state = EXCLUDED.user_state,
+                      world = EXCLUDED.world,
                       updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -189,6 +195,7 @@ class PostgresMonologueStore:
                         state.internal_monologue,
                         json.dumps(state.affect.model_dump()),
                         json.dumps(state.user_state),
+                        json.dumps(state.world.model_dump()),
                         state.updated_at,
                     ),
                 )

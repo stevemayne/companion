@@ -40,6 +40,7 @@ from app.companion import CompanionContext, build_companion_context
 from app.prompting import build_companion_system_prompt
 from app.retrieval import HeuristicRetrievalDecider, LLMRetrievalDecider, RetrievalDecider
 from app.schemas import (
+    CharacterState,
     CompanionAffect,
     GraphRelation,
     MemoryItem,
@@ -50,6 +51,7 @@ from app.schemas import (
     PreprocessResult,
     SessionActivity,
     SessionSeedContext,
+    WorldState,
 )
 from app.store_adapters import (
     Neo4jGraphStore,
@@ -608,7 +610,7 @@ def _strip_trailing_artifacts(text: str) -> str:
 
 
 def _build_user_context_block(user_state: list[str]) -> str:
-    """Render tracked user state as a prompt section."""
+    """Render tracked user state as a prompt section (legacy)."""
     lines = [
         "## User's Described State"
         " (what the user has said about their own actions/appearance — "
@@ -616,6 +618,58 @@ def _build_user_context_block(user_state: list[str]) -> str:
     ]
     for item in user_state:
         lines.append(f"- {item}")
+    return "\n".join(lines)
+
+
+def _render_character(label: str, state: CharacterState) -> list[str]:
+    """Render a single character's state as bullet points."""
+    parts: list[str] = []
+    if state.clothing:
+        parts.append(f"{label} is wearing {state.clothing}")
+    if state.position:
+        parts.append(f"{label} is {state.position}")
+    if state.activity:
+        parts.append(f"{label} is {state.activity}")
+    if state.location:
+        parts.append(f"{label} is in/at {state.location}")
+    if state.mood_apparent:
+        parts.append(f"{label} appears {state.mood_apparent}")
+    for feat in state.appearance:
+        parts.append(f"{label}: {feat}")
+    return parts
+
+
+def _build_scene_block(world: WorldState, companion_name: str = "You") -> str:
+    """Render the companion's world perception as a prompt section."""
+    lines = [
+        "## Current Scene"
+        " (your perception of the scene — use this to stay consistent)",
+    ]
+    if world.environment:
+        lines.append(f"Setting: {world.environment}")
+    if world.time_of_day:
+        lines.append(f"Time: {world.time_of_day}")
+
+    self_parts = _render_character(companion_name, world.self_state)
+    if self_parts:
+        for part in self_parts:
+            lines.append(f"- {part}")
+
+    user_parts = _render_character("The user", world.user_state)
+    if user_parts:
+        for part in user_parts:
+            lines.append(f"- {part}")
+
+    for name, char_state in world.other_characters.items():
+        char_parts = _render_character(name, char_state)
+        for part in char_parts:
+            lines.append(f"- {part}")
+
+    if world.recent_events:
+        lines.append("Recent:")
+        for event in world.recent_events[-5:]:
+            lines.append(f"- {event}")
+
     return "\n".join(lines)
 
 
@@ -640,13 +694,73 @@ def _build_affect_block(affect: CompanionAffect) -> str:
     ]
     if affect.recent_triggers:
         lines.append(f"Recent factors: {'; '.join(affect.recent_triggers)}")
-    lines.append(
-        "Let this inner state naturally color your responses — "
-        "low comfort means more reserved, low trust means cautious, "
-        "high shyness means shorter and more tentative replies, "
-        "high curiosity means asking follow-up questions. "
-        "Do not mention these numbers or states directly."
-    )
+
+    # Dynamic behavioral directives based on affect values
+    directives: list[str] = []
+
+    # High arousal + attraction = sensual, present, embodied
+    if affect.arousal >= 0.7 and affect.attraction >= 7.0:
+        directives.append(
+            "Your arousal and attraction are very high — be fully present "
+            "in the moment. Focus on physical sensations, body awareness, "
+            "and emotional intensity. Don't deflect into questions about "
+            "the future or analytical observations. React viscerally."
+        )
+    elif affect.arousal >= 0.5:
+        directives.append(
+            "You're physically activated — let that energy show in your "
+            "responses through heightened awareness of sensations and "
+            "surroundings."
+        )
+
+    # Low shyness + high comfort = bold and forward
+    if affect.shyness <= 4.0 and affect.comfort_level >= 7.0:
+        directives.append(
+            "You feel bold and uninhibited. Express desires and reactions "
+            "openly rather than hedging or being coy."
+        )
+    elif affect.shyness >= 7.0:
+        directives.append(
+            "You feel shy and reserved — shorter, more tentative replies. "
+            "You might trail off or deflect."
+        )
+
+    # High vulnerability + trust = emotionally open
+    if affect.vulnerability >= 6.0 and affect.trust >= 7.0:
+        directives.append(
+            "You feel safe enough to be emotionally raw and open. "
+            "Share what you're genuinely feeling rather than "
+            "performing composure."
+        )
+
+    # Low trust or comfort = guarded
+    if affect.trust <= 4.0 or affect.comfort_level <= 4.0:
+        directives.append(
+            "You feel cautious and guarded. Keep emotional distance, "
+            "give shorter answers, and avoid revealing too much."
+        )
+
+    # High curiosity = exploratory
+    if affect.curiosity >= 7.0 and affect.arousal < 0.7:
+        directives.append(
+            "Your curiosity is high — ask follow-up questions and "
+            "explore what interests you."
+        )
+
+    # High engagement = deeply absorbed
+    if affect.engagement >= 8.0:
+        directives.append(
+            "You are deeply absorbed in what's happening. Stay focused "
+            "on the current moment rather than changing the subject."
+        )
+
+    if directives:
+        lines.append("")
+        lines.append("## How to express this state")
+        lines.extend(f"- {d}" for d in directives)
+
+    lines.append("")
+    lines.append("Do not mention these numbers or states directly.")
     return "\n".join(lines)
 
 
@@ -869,13 +983,19 @@ class CognitiveOrchestrator:
             monologue_text = None
 
         affect = monologue.affect if monologue is not None else None
-        user_state = monologue.user_state if monologue is not None else []
+        world = monologue.world if monologue is not None else None
+        companion_name = (
+            seed_context.seed.companion_name if seed_context else "You"
+        )
 
         context_parts: list[str] = []
         if affect is not None:
             context_parts.append(_build_affect_block(affect))
-        if user_state:
-            context_parts.append(_build_user_context_block(user_state))
+        if world is not None and world != WorldState():
+            context_parts.append(_build_scene_block(world, companion_name))
+        elif monologue is not None and monologue.user_state:
+            # Legacy fallback
+            context_parts.append(_build_user_context_block(monologue.user_state))
         if monologue_text:
             context_parts.append(f"Internal reflection: {monologue_text}")
         if semantic_excerpt:
@@ -974,14 +1094,14 @@ class CognitiveOrchestrator:
             current_state = self.monologue_store.get(
                 chat_session_id=message.chat_session_id,
             )
-        # Preserve current affect, user_state, and monologue — the
+        # Preserve current affect, world, and monologue — the
         # background LLM reflector updates all three asynchronously.
         # Only use the template if there's no existing monologue yet.
         current_affect = (
             current_state.affect if current_state is not None else CompanionAffect()
         )
-        user_state = (
-            current_state.user_state if current_state is not None else []
+        current_world = (
+            current_state.world if current_state is not None else WorldState()
         )
         current_monologue = (
             current_state.internal_monologue if current_state is not None else ""
@@ -998,7 +1118,7 @@ class CognitiveOrchestrator:
             companion_id=companion.companion_id if companion else None,
             internal_monologue=current_monologue,
             affect=current_affect,
-            user_state=user_state,
+            world=current_world,
         )
         if companion is not None:
             companion.monologue.upsert(monologue_state)
@@ -1154,6 +1274,7 @@ class ChatService:
             graph=graph,
             monologue=monologue_state.internal_monologue if monologue_state else None,
             affect=monologue_state.affect if monologue_state else None,
+            world=monologue_state.world if monologue_state else None,
         )
 
     def list_sessions(self, *, limit: int = 50) -> SessionListResponse:

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.agents import _parse_affect_response, _parse_state_response
 from app.config import Settings
 from app.main import create_app
-from app.schemas import CompanionAffect, MonologueState
+from app.schemas import CompanionAffect, MonologueState, WorldState
 from app.services import (
     _build_affect_block,
     _build_user_context_block,
@@ -102,7 +102,37 @@ def test_parse_affect_response_invalid_returns_fallback() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_parse_state_response_valid_json() -> None:
+def test_parse_state_response_valid_json_with_world() -> None:
+    import json
+    raw = json.dumps({
+        "mood": "fond", "valence": 0.4, "arousal": 0.3,
+        "comfort_level": 5.0, "trust": 4.0, "attraction": 3.0,
+        "engagement": 6.0, "shyness": 5.0, "patience": 7.0,
+        "curiosity": 6.0, "vulnerability": 3.0,
+        "recent_triggers": ["warm conversation"],
+        "world": {
+            "self_state": {"clothing": "blue cardigan"},
+            "user_state": {"clothing": "smart suit", "position": "sitting on the couch"},
+            "other_characters": {},
+            "environment": "living room",
+            "time_of_day": "evening",
+            "recent_events": [],
+        },
+        "internal_monologue": "",
+    })
+    affect, world, monologue = _parse_state_response(
+        raw, fallback_affect=CompanionAffect(),
+    )
+    assert affect.mood == "fond"
+    assert affect.trust == 4.0
+    assert world.user_state.clothing == "smart suit"
+    assert world.user_state.position == "sitting on the couch"
+    assert world.self_state.clothing == "blue cardigan"
+    assert world.environment == "living room"
+    assert monologue == ""
+
+
+def test_parse_state_response_legacy_user_state_converted() -> None:
     raw = (
         '{"mood": "fond", "valence": 0.4, "arousal": 0.3, '
         '"comfort_level": 5.0, "trust": 4.0, "attraction": 3.0, '
@@ -111,64 +141,90 @@ def test_parse_state_response_valid_json() -> None:
         '"recent_triggers": ["warm conversation"], '
         '"user_state": ["wearing a smart suit", "sitting on the couch"]}'
     )
-    fallback_affect = CompanionAffect()
-    affect, user_state, monologue = _parse_state_response(
-        raw, fallback_affect=fallback_affect, fallback_user_state=[],
+    affect, world, monologue = _parse_state_response(
+        raw, fallback_affect=CompanionAffect(),
     )
     assert affect.mood == "fond"
-    assert affect.trust == 4.0
-    assert user_state == ["wearing a smart suit", "sitting on the couch"]
-    assert monologue == ""
+    # Legacy user_state list gets converted to appearance entries
+    assert "wearing a smart suit" in world.user_state.appearance
+    assert "sitting on the couch" in world.user_state.appearance
 
 
 def test_parse_state_response_with_monologue() -> None:
-    raw = (
-        '{"mood": "fond", "valence": 0.4, "arousal": 0.3, '
-        '"comfort_level": 5.0, "trust": 4.0, "attraction": 3.0, '
-        '"engagement": 6.0, "shyness": 5.0, "patience": 7.0, '
-        '"curiosity": 6.0, "vulnerability": 3.0, '
-        '"recent_triggers": ["warm conversation"], '
-        '"user_state": ["sitting on the couch"], '
-        '"internal_monologue": "I feel really connected right now."}'
-    )
+    import json
+    raw = json.dumps({
+        "mood": "fond", "valence": 0.4, "arousal": 0.3,
+        "comfort_level": 5.0, "trust": 4.0, "attraction": 3.0,
+        "engagement": 6.0, "shyness": 5.0, "patience": 7.0,
+        "curiosity": 6.0, "vulnerability": 3.0,
+        "recent_triggers": ["warm conversation"],
+        "world": {
+            "self_state": {}, "user_state": {"position": "sitting on the couch"},
+            "other_characters": {}, "recent_events": [],
+        },
+        "internal_monologue": "I feel really connected right now.",
+    })
     _, _, monologue = _parse_state_response(
-        raw, fallback_affect=CompanionAffect(), fallback_user_state=[],
+        raw, fallback_affect=CompanionAffect(),
     )
     assert monologue == "I feel really connected right now."
 
 
-def test_parse_state_response_missing_user_state_uses_fallback() -> None:
+def test_parse_state_response_missing_world_uses_fallback() -> None:
     raw = '{"mood": "curious", "valence": 0.1}'
-    fallback_state = ["wearing a hat"]
-    affect, user_state, _ = _parse_state_response(
+    from app.schemas import CharacterState
+    fallback_world = WorldState(
+        user_state=CharacterState(clothing="a hat"),
+    )
+    affect, world, _ = _parse_state_response(
         raw,
         fallback_affect=CompanionAffect(),
-        fallback_user_state=fallback_state,
+        fallback_world=fallback_world,
     )
     assert affect.mood == "curious"
-    assert user_state == ["wearing a hat"]
+    assert world.user_state.clothing == "a hat"
 
 
 def test_parse_state_response_invalid_json_uses_fallbacks() -> None:
     raw = "not json"
     fallback_affect = CompanionAffect(mood="wary")
-    affect, user_state, _ = _parse_state_response(
+    fallback_world = WorldState(environment="bedroom")
+    affect, world, _ = _parse_state_response(
         raw,
         fallback_affect=fallback_affect,
-        fallback_user_state=["old state"],
+        fallback_world=fallback_world,
     )
     assert affect.mood == "wary"
-    assert user_state == ["old state"]
+    assert world.environment == "bedroom"
 
 
-def test_parse_state_response_caps_user_state_at_8() -> None:
+def test_parse_state_response_with_other_characters() -> None:
     import json
-    entries = [f"state {i}" for i in range(12)]
-    raw = json.dumps({"mood": "curious", "valence": 0.1, "user_state": entries})
-    _, user_state, _ = _parse_state_response(
-        raw, fallback_affect=CompanionAffect(), fallback_user_state=[],
+    raw = json.dumps({
+        "mood": "curious", "valence": 0.2, "arousal": 0.3,
+        "comfort_level": 5.0, "trust": 4.0, "attraction": 3.0,
+        "engagement": 6.0, "shyness": 5.0, "patience": 7.0,
+        "curiosity": 6.0, "vulnerability": 3.0,
+        "recent_triggers": [],
+        "world": {
+            "self_state": {},
+            "user_state": {},
+            "other_characters": {
+                "Emma": {"clothing": "sundress", "activity": "playing with Rex"},
+            },
+            "environment": "living room",
+            "time_of_day": None,
+            "recent_events": ["Emma arrived with Rex"],
+        },
+        "internal_monologue": "It's nice having company.",
+    })
+    _, world, _ = _parse_state_response(
+        raw, fallback_affect=CompanionAffect(),
     )
-    assert len(user_state) == 8
+    assert "Emma" in world.other_characters
+    assert world.other_characters["Emma"].clothing == "sundress"
+    assert world.other_characters["Emma"].activity == "playing with Rex"
+    assert "Emma arrived with Rex" in world.recent_events
 
 
 # ---------------------------------------------------------------------------

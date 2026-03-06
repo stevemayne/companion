@@ -232,7 +232,7 @@ def _extract_content(payload: dict[str, Any]) -> str:
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
         raise InferenceError("Inference response missing message content.")
-    return content
+    return content.strip()
 
 
 def _extract_finish_reason(payload: dict[str, Any]) -> str | None:

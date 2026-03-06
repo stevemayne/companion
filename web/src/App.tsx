@@ -4,7 +4,7 @@ import { AffectPanel } from "./AffectPanel";
 import { fetchDebugTraces } from "./debugApi";
 import { DebugPanel } from "./DebugPanel";
 import { DEFAULT_NOTES, DEFAULT_SEED } from "./defaultSeed";
-import { CompanionAffect, fetchKnowledge, GraphRelation, MemoryFact } from "./knowledgeApi";
+import { CompanionAffect, fetchKnowledge, GraphRelation, MemoryFact, WorldState } from "./knowledgeApi";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { fetchInferenceLogs, InferenceLogEntry } from "./logsApi";
 import { InferenceLogPanel } from "./InferenceLogPanel";
@@ -145,6 +145,7 @@ export function App() {
   const [knowledgeGraph, setKnowledgeGraph] = useState<GraphRelation[]>([]);
   const [knowledgeMonologue, setKnowledgeMonologue] = useState<string | null>(null);
   const [knowledgeAffect, setKnowledgeAffect] = useState<CompanionAffect | null>(null);
+  const [knowledgeWorld, setKnowledgeWorld] = useState<WorldState | null>(null);
 
   const messagesPaneRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -228,6 +229,7 @@ export function App() {
       setKnowledgeGraph(data.graph);
       setKnowledgeMonologue(data.monologue);
       setKnowledgeAffect(data.affect);
+      setKnowledgeWorld(data.world);
       setKnowledgeStatus(`loaded`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
@@ -587,6 +589,7 @@ export function App() {
                   facts={knowledgeFacts}
                   graph={knowledgeGraph}
                   monologue={knowledgeMonologue}
+                  world={knowledgeWorld}
                   status={knowledgeStatus}
                 />
               </div>

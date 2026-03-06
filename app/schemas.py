@@ -79,11 +79,34 @@ class CompanionAffect(BaseModel):
     recent_triggers: list[str] = Field(default_factory=list)
 
 
+class CharacterState(BaseModel):
+    """Physical/locational state of a character as perceived by the observer."""
+
+    clothing: str | None = None
+    location: str | None = None
+    activity: str | None = None
+    position: str | None = None
+    appearance: list[str] = Field(default_factory=list)
+    mood_apparent: str | None = None
+
+
+class WorldState(BaseModel):
+    """A companion's subjective perception of the current scene."""
+
+    self_state: CharacterState = Field(default_factory=CharacterState)
+    user_state: CharacterState = Field(default_factory=CharacterState)
+    other_characters: dict[str, CharacterState] = Field(default_factory=dict)
+    environment: str | None = None
+    time_of_day: str | None = None
+    recent_events: list[str] = Field(default_factory=list)
+
+
 class MonologueState(BaseModel):
     chat_session_id: UUID
     companion_id: UUID | None = None
     internal_monologue: str = Field(default="")
     affect: CompanionAffect = Field(default_factory=CompanionAffect)
+    world: WorldState = Field(default_factory=WorldState)
     user_state: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

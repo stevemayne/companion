@@ -12,6 +12,7 @@ from app.schemas import (
     MemoryItem,
     Message,
     SessionSeedContext,
+    WorldState,
 )
 
 
@@ -48,6 +49,7 @@ class KnowledgeResponse(BaseModel):
     graph: list[GraphRelation]
     monologue: str | None = None
     affect: CompanionAffect | None = None
+    world: WorldState | None = None
 
 
 class SessionSummary(BaseModel):
