@@ -219,7 +219,12 @@ class QdrantVectorStore:
             for collection in self._client.get_collections().collections
         }
         if self.COLLECTION_NAME in existing:
-            return
+            info = self._client.get_collection(self.COLLECTION_NAME)
+            current_dim = getattr(info.config.params.vectors, "size", None)
+            if current_dim != self._dimensions:
+                self._client.delete_collection(self.COLLECTION_NAME)
+            else:
+                return
         self._client.create_collection(
             collection_name=self.COLLECTION_NAME,
             vectors_config=qdrant_models.VectorParams(
@@ -698,6 +703,14 @@ class Neo4jGraphStore:
                 FOR ()-[r:RELATES_TO]-()
                 ON (r.chat_session_id)
                 """
+            )
+            # Backfill companion_id on legacy nodes/relationships that predate
+            # the multi-companion architecture.
+            session.run(
+                'MATCH (e:Entity) WHERE e.companion_id IS NULL SET e.companion_id = ""'
+            )
+            session.run(
+                'MATCH ()-[r:RELATES_TO]-() WHERE r.companion_id IS NULL SET r.companion_id = ""'
             )
 
     def upsert_relation(self, relation: GraphRelation) -> None:
