@@ -67,5 +67,7 @@ def test_orchestrator_uses_graph_context_on_follow_up() -> None:
     assert "Internal reflection: Focus on a neutral user" in content
     # Conversation history includes the earlier user message.
     assert "I argued with Sarah yesterday." in content
-    # Affect block should appear in the system prompt on the second turn
-    assert "Current mood:" in content
+    # Affect block should appear in the system prompt on the second turn.
+    # The directive "You're feeling ..." survives post-processing since
+    # it's plain prose, not a leaked metric.
+    assert "You're feeling" in content

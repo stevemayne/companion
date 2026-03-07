@@ -27,14 +27,10 @@ def test_companion_affect_defaults() -> None:
     assert affect.mood == "curious"
     assert affect.valence == 0.1
     assert affect.arousal == 0.3
-    assert affect.comfort_level == 3.0
+    assert affect.dominance == 0.4
     assert affect.trust == 3.0
-    assert affect.attraction == 3.0
+    assert affect.closeness == 3.0
     assert affect.engagement == 5.0
-    assert affect.shyness == 6.0
-    assert affect.patience == 7.0
-    assert affect.curiosity == 6.0
-    assert affect.vulnerability == 2.0
     assert affect.recent_triggers == []
 
 
@@ -43,16 +39,30 @@ def test_companion_affect_defaults() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_affect_block_contains_key_fields() -> None:
-    affect = CompanionAffect(mood="wary", trust=2.0, engagement=7.0, shyness=8.0)
+def test_build_affect_block_contains_mood_and_directives() -> None:
+    affect = CompanionAffect(mood="wary", trust=2.0, engagement=7.0, dominance=0.2)
     block = _build_affect_block(affect)
-    assert "Current mood: wary" in block
-    assert "Trust in user: 2.0/10" in block
-    assert "Engagement: 7.0/10" in block
-    assert "Shyness: 8.0/10" in block
-    assert "Patience:" in block
-    assert "Curiosity:" in block
-    assert "Vulnerability:" in block
+    assert "wary" in block
+    # Low trust should produce a guarded directive
+    assert "guarded" in block
+    # Low dominance should produce tentative directive
+    assert "tentative" in block
+    # Should NOT contain raw numeric values
+    assert "/10" not in block
+
+
+def test_build_affect_block_no_raw_numbers() -> None:
+    affect = CompanionAffect(
+        mood="fond", valence=0.5, arousal=0.6, dominance=0.5,
+        trust=5.0, closeness=5.0, engagement=5.0,
+    )
+    block = _build_affect_block(affect)
+    # No /10 metrics should appear
+    assert "/10" not in block
+    # No numeric field labels
+    assert "Comfort with user:" not in block
+    assert "Shyness:" not in block
+    assert "Patience:" not in block
 
 
 def test_build_affect_block_includes_triggers() -> None:
@@ -63,24 +73,84 @@ def test_build_affect_block_includes_triggers() -> None:
     assert "user seemed upset" in block
 
 
+def test_build_affect_block_high_closeness_high_dominance() -> None:
+    affect = CompanionAffect(
+        mood="playful", closeness=8.0, dominance=0.8, trust=7.0,
+    )
+    block = _build_affect_block(affect)
+    assert "bold" in block or "uninhibited" in block
+    assert "intimate" in block or "affectionate" in block
+
+
+def test_build_affect_block_low_engagement() -> None:
+    affect = CompanionAffect(mood="bored", engagement=2.0)
+    block = _build_affect_block(affect)
+    assert "drifting" in block or "distracted" in block
+
+
+# ---------------------------------------------------------------------------
+# Affect clamping
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_affect_limits_wild_swings() -> None:
+    from app.agents import _clamp_affect
+    previous = CompanionAffect(
+        valence=0.1, arousal=0.3, dominance=0.4,
+        trust=3.0, closeness=3.0, engagement=5.0,
+    )
+    # LLM tries to jump everything to max
+    proposed = CompanionAffect(
+        valence=1.0, arousal=1.0, dominance=1.0,
+        trust=10.0, closeness=10.0, engagement=10.0,
+    )
+    result = _clamp_affect(proposed, previous)
+    assert result.valence <= 0.1 + 0.3 + 0.001
+    assert result.arousal <= 0.3 + 0.25 + 0.001
+    assert result.dominance <= 0.4 + 0.15 + 0.001
+    assert result.trust <= 3.0 + 0.8 + 0.001
+    assert result.closeness <= 3.0 + 0.8 + 0.001
+    assert result.engagement <= 5.0 + 1.5 + 0.001
+
+
+def test_clamp_affect_allows_decreases() -> None:
+    from app.agents import _clamp_affect
+    previous = CompanionAffect(
+        valence=0.5, arousal=0.8, dominance=0.7,
+        trust=7.0, closeness=6.0, engagement=8.0,
+    )
+    proposed = CompanionAffect(
+        valence=-1.0, arousal=0.0, dominance=0.0,
+        trust=0.0, closeness=0.0, engagement=0.0,
+    )
+    result = _clamp_affect(proposed, previous)
+    assert result.valence >= 0.5 - 0.3 - 0.001
+    assert result.arousal >= 0.8 - 0.25 - 0.001
+    assert result.dominance >= 0.7 - 0.15 - 0.001
+    assert result.trust >= 7.0 - 0.8 - 0.001
+    assert result.closeness >= 6.0 - 0.8 - 0.001
+    assert result.engagement >= 8.0 - 1.5 - 0.001
+
+
 # ---------------------------------------------------------------------------
 # LLM affect response parsing
 # ---------------------------------------------------------------------------
 
 
 def test_parse_affect_response_valid_json() -> None:
-    raw = '{"mood": "amused", "valence": 0.5, "arousal": 0.4, '
-    raw += '"comfort_level": 6.0, "trust": 5.0, "attraction": 4.0, '
-    raw += '"engagement": 7.0, "shyness": 4.0, "patience": 8.0, '
-    raw += '"curiosity": 7.0, "vulnerability": 3.0, '
-    raw += '"recent_triggers": ["user told a joke"]}'
+    raw = (
+        '{"mood": "amused", "valence": 0.5, "arousal": 0.4, '
+        '"dominance": 0.6, "trust": 5.0, "closeness": 4.0, '
+        '"engagement": 7.0, '
+        '"recent_triggers": ["user told a joke"]}'
+    )
     fallback = CompanionAffect()
     result = _parse_affect_response(raw, fallback=fallback)
     assert result.mood == "amused"
     assert result.valence == 0.5
     assert result.engagement == 7.0
-    assert result.shyness == 4.0
-    assert result.curiosity == 7.0
+    assert result.dominance == 0.6
+    assert result.closeness == 4.0
 
 
 def test_parse_affect_response_fenced_json() -> None:
@@ -98,17 +168,19 @@ def test_parse_affect_response_invalid_returns_fallback() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LLM state response parsing (affect + user_state)
+# LLM state response parsing (affect + world)
 # ---------------------------------------------------------------------------
 
 
 def test_parse_state_response_valid_json_with_world() -> None:
     import json
-    raw = json.dumps({
+    proposed = {
         "mood": "fond", "valence": 0.4, "arousal": 0.3,
-        "comfort_level": 5.0, "trust": 4.0, "attraction": 3.0,
-        "engagement": 6.0, "shyness": 5.0, "patience": 7.0,
-        "curiosity": 6.0, "vulnerability": 3.0,
+        "dominance": 0.5, "trust": 4.0, "closeness": 5.0,
+        "engagement": 6.0,
+    }
+    raw = json.dumps({
+        **proposed,
         "recent_triggers": ["warm conversation"],
         "world": {
             "self_state": {"clothing": "blue cardigan"},
@@ -120,8 +192,10 @@ def test_parse_state_response_valid_json_with_world() -> None:
         },
         "internal_monologue": "",
     })
+    # Use a fallback matching the proposed values so the clamp is a no-op —
+    # this test is validating parsing, not clamping.
     affect, world, monologue = _parse_state_response(
-        raw, fallback_affect=CompanionAffect(),
+        raw, fallback_affect=CompanionAffect(**proposed),
     )
     assert affect.mood == "fond"
     assert affect.trust == 4.0
@@ -133,16 +207,19 @@ def test_parse_state_response_valid_json_with_world() -> None:
 
 
 def test_parse_state_response_legacy_user_state_converted() -> None:
+    fallback = CompanionAffect(
+        mood="fond", valence=0.4, arousal=0.3,
+        dominance=0.5, trust=4.0, closeness=5.0, engagement=6.0,
+    )
     raw = (
         '{"mood": "fond", "valence": 0.4, "arousal": 0.3, '
-        '"comfort_level": 5.0, "trust": 4.0, "attraction": 3.0, '
-        '"engagement": 6.0, "shyness": 5.0, "patience": 7.0, '
-        '"curiosity": 6.0, "vulnerability": 3.0, '
+        '"dominance": 0.5, "trust": 4.0, "closeness": 5.0, '
+        '"engagement": 6.0, '
         '"recent_triggers": ["warm conversation"], '
         '"user_state": ["wearing a smart suit", "sitting on the couch"]}'
     )
     affect, world, monologue = _parse_state_response(
-        raw, fallback_affect=CompanionAffect(),
+        raw, fallback_affect=fallback,
     )
     assert affect.mood == "fond"
     # Legacy user_state list gets converted to appearance entries
@@ -152,11 +229,14 @@ def test_parse_state_response_legacy_user_state_converted() -> None:
 
 def test_parse_state_response_with_monologue() -> None:
     import json
+    fallback = CompanionAffect(
+        mood="fond", valence=0.4, arousal=0.3,
+        dominance=0.5, trust=4.0, closeness=5.0, engagement=6.0,
+    )
     raw = json.dumps({
         "mood": "fond", "valence": 0.4, "arousal": 0.3,
-        "comfort_level": 5.0, "trust": 4.0, "attraction": 3.0,
-        "engagement": 6.0, "shyness": 5.0, "patience": 7.0,
-        "curiosity": 6.0, "vulnerability": 3.0,
+        "dominance": 0.5, "trust": 4.0, "closeness": 5.0,
+        "engagement": 6.0,
         "recent_triggers": ["warm conversation"],
         "world": {
             "self_state": {}, "user_state": {"position": "sitting on the couch"},
@@ -165,7 +245,7 @@ def test_parse_state_response_with_monologue() -> None:
         "internal_monologue": "I feel really connected right now.",
     })
     _, _, monologue = _parse_state_response(
-        raw, fallback_affect=CompanionAffect(),
+        raw, fallback_affect=fallback,
     )
     assert monologue == "I feel really connected right now."
 
@@ -200,11 +280,14 @@ def test_parse_state_response_invalid_json_uses_fallbacks() -> None:
 
 def test_parse_state_response_with_other_characters() -> None:
     import json
+    fallback = CompanionAffect(
+        mood="curious", valence=0.2, arousal=0.3,
+        dominance=0.5, trust=4.0, closeness=3.0, engagement=6.0,
+    )
     raw = json.dumps({
         "mood": "curious", "valence": 0.2, "arousal": 0.3,
-        "comfort_level": 5.0, "trust": 4.0, "attraction": 3.0,
-        "engagement": 6.0, "shyness": 5.0, "patience": 7.0,
-        "curiosity": 6.0, "vulnerability": 3.0,
+        "dominance": 0.5, "trust": 4.0, "closeness": 3.0,
+        "engagement": 6.0,
         "recent_triggers": [],
         "world": {
             "self_state": {},
@@ -219,7 +302,7 @@ def test_parse_state_response_with_other_characters() -> None:
         "internal_monologue": "It's nice having company.",
     })
     _, world, _ = _parse_state_response(
-        raw, fallback_affect=CompanionAffect(),
+        raw, fallback_affect=fallback,
     )
     assert "Emma" in world.other_characters
     assert world.other_characters["Emma"].clothing == "sundress"
@@ -237,7 +320,7 @@ def test_affect_state_appears_in_system_prompt_when_set() -> None:
     client = TestClient(app)
     session_id = str(uuid4())
 
-    client.post(
+    seed_resp = client.post(
         f"/v1/sessions/{session_id}/seed",
         json={
             "seed": {
@@ -249,13 +332,16 @@ def test_affect_state_appears_in_system_prompt_when_set() -> None:
             },
         },
     )
+    companion_id = seed_resp.json()["companion_id"]
 
-    # Pre-populate affect in the monologue store
+    # Pre-populate affect in the monologue store, using the companion_id
+    # from the seed so that the ScopedMonologueStore will find it.
     from uuid import UUID
 
     app.state.container.monologue_store.upsert(
         MonologueState(
             chat_session_id=UUID(session_id),
+            companion_id=UUID(companion_id),
             affect=CompanionAffect(mood="wary", trust=2.0, valence=-0.2),
         )
     )
@@ -266,8 +352,11 @@ def test_affect_state_appears_in_system_prompt_when_set() -> None:
     )
     assert response.status_code == 200
     content = response.json()["assistant_message"]["content"]
-    assert "Current mood: wary" in content
-    assert "Trust in user: 2.0/10" in content
+    # The mock provider echoes the full system prompt.  Post-processing
+    # strips section headers like "## Your Inner Emotional State" but
+    # the directive text survives.  With trust=2.0 the directive says
+    # "guarded" which is plain prose and not stripped.
+    assert "guarded" in content
 
 
 # ---------------------------------------------------------------------------

@@ -697,13 +697,19 @@ class Neo4jGraphStore:
 
     def ensure_schema(self) -> None:
         with self._driver.session() as session:
-            session.run(
-                """
-                CREATE INDEX relation_session_idx IF NOT EXISTS
-                FOR ()-[r:RELATES_TO]-()
-                ON (r.chat_session_id)
-                """
+            # Only create the index if it doesn't already exist to avoid
+            # noisy "already exists" notifications from Neo4j.
+            result = session.run(
+                "SHOW INDEXES WHERE name = 'relation_session_idx'"
             )
+            if not result.peek():
+                session.run(
+                    """
+                    CREATE INDEX relation_session_idx IF NOT EXISTS
+                    FOR ()-[r:RELATES_TO]-()
+                    ON (r.chat_session_id)
+                    """
+                )
             # Backfill companion_id on legacy nodes/relationships that predate
             # the multi-companion architecture.
             session.run(

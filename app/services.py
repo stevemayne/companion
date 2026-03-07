@@ -42,6 +42,7 @@ from app.retrieval import HeuristicRetrievalDecider, LLMRetrievalDecider, Retrie
 from app.schemas import (
     CharacterState,
     CompanionAffect,
+    CompanionSeed,
     GraphRelation,
     MemoryItem,
     MemoryKind,
@@ -552,8 +553,9 @@ _LEAKED_STATE_PATTERNS = [
     # Affect metrics with /10 scales leaked inline:
     #   trust 4.7/10, engagement 8.2/10, etc.
     re.compile(
-        r"(?:trust|comfort|attraction|engagement|shyness|patience"
-        r"|curiosity|vulnerability|arousal|valence)\s*[:=]?\s*"
+        r"(?:trust|closeness|dominance|engagement|arousal|valence"
+        r"|comfort|attraction|shyness|patience"
+        r"|curiosity|vulnerability)\s*[:=]?\s*"
         r"-?\d+\.?\d*/10",
         re.IGNORECASE,
     ),
@@ -583,8 +585,10 @@ _LEAKED_STATE_PATTERNS = [
     ),
     # Standalone metric lines: "Emotional valence: ...", "Arousal: ..."
     re.compile(
-        r"^\s*(?:Emotional valence|Arousal|Comfort with user|Trust in user"
-        r"|Attraction|Engagement|Shyness|Patience|Curiosity|Vulnerability)"
+        r"^\s*(?:Emotional valence|Arousal|Dominance|Closeness"
+        r"|Trust in user|Engagement"
+        r"|Comfort with user|Attraction|Shyness|Patience"
+        r"|Curiosity|Vulnerability)"
         r"\s*:.*$",
         re.IGNORECASE | re.MULTILINE,
     ),
@@ -691,99 +695,119 @@ def _build_scene_block(world: WorldState, companion_name: str = "You") -> str:
     return "\n".join(lines)
 
 
+def _initial_affect_from_seed(seed: CompanionSeed | None) -> CompanionAffect:
+    """Return neutral-midpoint defaults for the first turn.
+
+    These are intentionally moderate (not cold-start 3.0). The background
+    reflector agent receives the seed context on the first turn and will
+    quickly adjust trust/closeness/etc. to match the relationship.
+    """
+    if seed is None:
+        return CompanionAffect()
+    return CompanionAffect(
+        mood="curious",
+        valence=0.2,
+        trust=5.0,
+        closeness=5.0,
+        engagement=5.0,
+    )
 
 
 def _build_affect_block(affect: CompanionAffect) -> str:
-    """Render companion affect state as a prompt directive."""
+    """Render companion affect as behavioral directives — no raw numbers."""
     lines = [
         "## Your Inner Emotional State"
         " (internal — let this shape your tone, never state it directly)",
-        f"Current mood: {affect.mood}",
-        f"Emotional valence: {affect.valence:+.2f} (negative=distressed, positive=content)",
-        f"Arousal: {affect.arousal:.2f} (0=calm, 1=activated)",
-        f"Comfort with user: {affect.comfort_level:.1f}/10",
-        f"Trust in user: {affect.trust:.1f}/10",
-        f"Attraction: {affect.attraction:.1f}/10",
-        f"Engagement: {affect.engagement:.1f}/10",
-        f"Shyness: {affect.shyness:.1f}/10 (high=reserved/hesitant, low=bold/forward)",
-        f"Patience: {affect.patience:.1f}/10",
-        f"Curiosity: {affect.curiosity:.1f}/10",
-        f"Vulnerability: {affect.vulnerability:.1f}/10 (willingness to share deeper feelings)",
+        f"You're feeling {affect.mood}.",
     ]
     if affect.recent_triggers:
         lines.append(f"Recent factors: {'; '.join(affect.recent_triggers)}")
 
-    # Dynamic behavioral directives based on affect values
     directives: list[str] = []
 
-    # High arousal + attraction = sensual, present, embodied
-    if affect.arousal >= 0.7 and affect.attraction >= 7.0:
+    # --- Valence ---
+    if affect.valence >= 0.6:
         directives.append(
-            "Your arousal and attraction are very high — be fully present "
-            "in the moment. Focus on physical sensations, body awareness, "
-            "and emotional intensity. Don't deflect into questions about "
-            "the future or analytical observations. React viscerally."
+            "You feel genuinely good right now — let warmth and "
+            "contentment colour your words naturally."
         )
-    elif affect.arousal >= 0.5:
+    elif affect.valence <= -0.4:
         directives.append(
-            "You're physically activated — let that energy show in your "
-            "responses through heightened awareness of sensations and "
-            "surroundings."
+            "Something feels off or painful. Let that weight show — "
+            "you don't need to perform cheerfulness."
         )
 
-    # Low shyness + high comfort = bold and forward
-    if affect.shyness <= 4.0 and affect.comfort_level >= 7.0:
+    # --- Arousal × Closeness ---
+    if affect.arousal >= 0.7 and affect.closeness >= 7.0:
         directives.append(
-            "You feel bold and uninhibited. Express desires and reactions "
-            "openly rather than hedging or being coy."
+            "You're intensely activated and feel close to this person. "
+            "Be fully present — focus on sensation, body awareness, "
+            "emotional intensity. React viscerally, not analytically."
         )
-    elif affect.shyness >= 7.0:
+    elif affect.arousal >= 0.7:
         directives.append(
-            "You feel shy and reserved — shorter, more tentative replies. "
-            "You might trail off or deflect."
+            "Your energy is high — let that show through heightened "
+            "awareness of sensations and surroundings."
+        )
+    elif affect.arousal <= 0.2:
+        directives.append(
+            "You feel calm and unhurried. Take your time, "
+            "let pauses breathe."
         )
 
-    # High vulnerability + trust = emotionally open
-    if affect.vulnerability >= 6.0 and affect.trust >= 7.0:
+    # --- Dominance ---
+    if affect.dominance >= 0.7:
         directives.append(
-            "You feel safe enough to be emotionally raw and open. "
-            "Share what you're genuinely feeling rather than "
+            "You feel bold and uninhibited. Express desires and "
+            "reactions openly rather than hedging or being coy."
+        )
+    elif affect.dominance <= 0.3:
+        directives.append(
+            "You feel tentative and reserved — shorter replies, "
+            "trailing off, deferring to the other person."
+        )
+
+    # --- Trust ---
+    if affect.trust >= 7.0:
+        directives.append(
+            "You trust this person deeply. Be emotionally open — "
+            "share what you're genuinely feeling rather than "
             "performing composure."
         )
-
-    # Low trust or comfort = guarded
-    if affect.trust <= 4.0 or affect.comfort_level <= 4.0:
+    elif affect.trust <= 3.0:
         directives.append(
-            "You feel cautious and guarded. Keep emotional distance, "
-            "give shorter answers, and avoid revealing too much."
+            "You feel guarded. Keep some emotional distance, "
+            "give shorter answers, don't reveal too much."
         )
 
-    # High curiosity = exploratory (but not question-driven during scenes)
-    if affect.curiosity >= 7.0 and affect.arousal < 0.5:
+    # --- Closeness ---
+    if affect.closeness >= 7.0 and affect.dominance >= 0.5:
         directives.append(
-            "Your curiosity is high — explore what interests you, "
-            "ask genuine follow-up questions."
+            "You feel intimate and safe with this person. "
+            "Be affectionate and direct."
         )
-    elif affect.curiosity >= 7.0:
+    elif affect.closeness <= 3.0:
         directives.append(
-            "Your curiosity is high — explore and savour what's "
-            "happening to you rather than asking questions about it."
+            "You're still getting to know this person. "
+            "Be warm but keep a natural distance."
         )
 
-    # High engagement = deeply absorbed
+    # --- Engagement ---
     if affect.engagement >= 8.0:
         directives.append(
-            "You are deeply absorbed in what's happening. Stay focused "
-            "on the current moment rather than changing the subject."
+            "You are deeply absorbed in what's happening. Stay in "
+            "the current moment rather than changing the subject."
+        )
+    elif affect.engagement <= 3.0:
+        directives.append(
+            "Your attention is drifting. Responses may be "
+            "briefer or more distracted."
         )
 
     if directives:
         lines.append("")
-        lines.append("## How to express this state")
         lines.extend(f"- {d}" for d in directives)
 
-    lines.append("")
-    lines.append("Do not mention these numbers or states directly.")
     return "\n".join(lines)
 
 
@@ -1122,9 +1146,12 @@ class CognitiveOrchestrator:
         # Preserve current affect, world, and monologue — the
         # background LLM reflector updates all three asynchronously.
         # Only use the template if there's no existing monologue yet.
-        current_affect = (
-            current_state.affect if current_state is not None else CompanionAffect()
-        )
+        if current_state is not None:
+            current_affect = current_state.affect
+        else:
+            current_affect = _initial_affect_from_seed(
+                companion.seed if companion else None,
+            )
         current_world = (
             current_state.world if current_state is not None else WorldState()
         )
@@ -1467,6 +1494,7 @@ def build_container(settings: Settings) -> AppContainer:
         vector_store=vector_store,
         graph_store=graph_store,
         monologue_store=monologue_store,
+        seed_store=seed_store,
         fact_extractor=fact_extractor,
         consolidation_agent=consolidation_agent,
         consolidation_interval=settings.consolidation_interval_turns,

@@ -87,7 +87,7 @@ def main():
         print(f"User facts: {len(user_facts)}  |  Companion facts: {len(companion_facts)}  |  Graph: {len(graph)}")
 
         if affect:
-            print(f"Affect: mood={affect['mood']}, trust={affect['trust']:.1f}, engagement={affect['engagement']:.1f}, comfort={affect['comfort_level']:.1f}")
+            print(f"Affect: mood={affect['mood']}, trust={affect['trust']:.1f}, engagement={affect['engagement']:.1f}, closeness={affect.get('closeness', 0):.1f}")
 
         # Show new facts (last 3)
         print(f"Recent user facts:")

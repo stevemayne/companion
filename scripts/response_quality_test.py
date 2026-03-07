@@ -100,35 +100,31 @@ CHLOE_SEED = CompanionSeed(
 # Affect: calm baseline
 CALM = CompanionAffect(
     mood="curious", valence=0.3, arousal=0.3,
-    comfort_level=6.0, trust=6.0, attraction=5.0,
-    engagement=5.0, shyness=5.0, patience=7.0,
-    curiosity=7.0, vulnerability=3.0,
+    dominance=0.5, trust=6.0, closeness=5.0,
+    engagement=5.0,
 )
 
 # Affect: excited, mid-arousal
 EXCITED = CompanionAffect(
     mood="excited", valence=0.7, arousal=0.6,
-    comfort_level=8.0, trust=7.5, attraction=7.0,
-    engagement=8.0, shyness=3.5, patience=8.0,
-    curiosity=8.0, vulnerability=5.0,
+    dominance=0.6, trust=7.5, closeness=7.0,
+    engagement=8.0,
     recent_triggers=["Physical transformation", "Latex clothing"],
 )
 
 # Affect: high arousal, very turned on
 HIGH_AROUSAL = CompanionAffect(
     mood="excited", valence=0.95, arousal=0.95,
-    comfort_level=9.5, trust=8.5, attraction=9.5,
-    engagement=10.0, shyness=2.0, patience=8.0,
-    curiosity=8.0, vulnerability=7.5,
+    dominance=0.8, trust=8.5, closeness=9.5,
+    engagement=10.0,
     recent_triggers=["Intense physical sensations", "Bondage", "Orgasm denial"],
 )
 
 # Affect: post-climax, tender
 POST_CLIMAX = CompanionAffect(
     mood="fond", valence=0.9, arousal=0.4,
-    comfort_level=10.0, trust=9.0, attraction=9.5,
-    engagement=7.0, shyness=1.5, patience=9.0,
-    curiosity=5.0, vulnerability=9.0,
+    dominance=0.9, trust=9.0, closeness=9.5,
+    engagement=7.0,
     recent_triggers=["Intense orgasm", "Release from bondage"],
 )
 
@@ -299,9 +295,8 @@ CASES: list[ResponseTestCase] = [
         user_message="Now",
         affect=CompanionAffect(
             mood="excited", valence=1.0, arousal=1.0,
-            comfort_level=10.0, trust=9.0, attraction=10.0,
-            engagement=10.0, shyness=0.5, patience=2.0,
-            curiosity=3.0, vulnerability=10.0,
+            dominance=0.1, trust=9.0, closeness=10.0,
+            engagement=10.0,
             recent_triggers=["Orgasm command", "Intense buildup", "Total surrender"],
         ),
         world=WorldState(
@@ -378,9 +373,8 @@ CASES: list[ResponseTestCase] = [
         ),
         affect=CompanionAffect(
             mood="fond", valence=0.7, arousal=0.4,
-            comfort_level=9.0, trust=8.0, attraction=8.0,
-            engagement=7.0, shyness=2.0, patience=8.0,
-            curiosity=6.0, vulnerability=6.0,
+            dominance=0.8, trust=8.0, closeness=8.0,
+            engagement=7.0,
         ),
         checks=[
             QualityCheck(
@@ -562,7 +556,7 @@ def _llm_judge(
         "You are evaluating a roleplay AI companion's response for quality.\n\n"
         f"## Scenario: {case.name}\n"
         f"Affect state: mood={case.affect.mood}, arousal={case.affect.arousal}, "
-        f"attraction={case.affect.attraction}, shyness={case.affect.shyness}, "
+        f"dominance={case.affect.dominance}, closeness={case.affect.closeness}, "
         f"engagement={case.affect.engagement}\n\n"
         f"## User message\n{case.user_message}\n\n"
         f"## Companion response\n{response}\n\n"

@@ -21,14 +21,10 @@ export type CompanionAffect = {
   mood: string;
   valence: number;
   arousal: number;
-  comfort_level: number;
+  dominance: number;
   trust: number;
-  attraction: number;
+  closeness: number;
   engagement: number;
-  shyness: number;
-  patience: number;
-  curiosity: number;
-  vulnerability: number;
   recent_triggers: string[];
 };
 

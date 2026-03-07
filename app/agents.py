@@ -16,12 +16,14 @@ from app.debug_trace import DebugTraceStore, build_trace_base
 from app.schemas import (
     CharacterState,
     CompanionAffect,
+    CompanionSeed,
     GraphRelation,
     MemoryItem,
     MemoryKind,
     MemoryStatus,
     Message,
     MonologueState,
+    SessionSeedContext,
     WorldState,
 )
 
@@ -65,6 +67,12 @@ class MonologueStore(Protocol):
     def upsert(self, state: MonologueState) -> MonologueState: ...
 
 
+class SeedContextStore(Protocol):
+    def get(
+        self, *, chat_session_id: UUID, companion_id: UUID | None = None,
+    ) -> SessionSeedContext | None: ...
+
+
 class FactExtractor(Protocol):
     def extract(
         self,
@@ -90,6 +98,7 @@ class BackgroundAgentDispatcher:
         vector_store: VectorStore,
         graph_store: GraphStore,
         monologue_store: MonologueStore,
+        seed_store: SeedContextStore | None = None,
         fact_extractor: FactExtractor,
         consolidation_agent: ConsolidationAgent | None = None,
         consolidation_interval: int = 10,
@@ -102,6 +111,7 @@ class BackgroundAgentDispatcher:
         self._vector_store = vector_store
         self._graph_store = graph_store
         self._monologue_store = monologue_store
+        self._seed_store = seed_store
         self._fact_extractor = fact_extractor
         self._consolidation_agent = consolidation_agent
         self._consolidation_interval = consolidation_interval
@@ -282,12 +292,21 @@ class BackgroundAgentDispatcher:
                     limit=6,
                 )
                 if recent:
+                    seed: CompanionSeed | None = None
+                    if self._seed_store is not None:
+                        seed_context = self._seed_store.get(
+                            chat_session_id=chat_session_id,
+                            companion_id=companion_id,
+                        )
+                        if seed_context is not None:
+                            seed = seed_context.seed
                     refined_affect, refined_world, refined_monologue = (
                         self._llm_refine_state(
                             chat_session_id=chat_session_id,
                             recent_messages=recent,
                             current_affect=current_affect,
                             current_world=current_world,
+                            seed=seed,
                         )
                     )
 
@@ -386,6 +405,7 @@ class BackgroundAgentDispatcher:
         recent_messages: list[Message],
         current_affect: CompanionAffect,
         current_world: WorldState,
+        seed: CompanionSeed | None = None,
     ) -> tuple[CompanionAffect, WorldState, str]:
         """Call the analysis LLM to refine affect, world state, and monologue."""
         conversation_excerpt = "\n".join(
@@ -394,12 +414,26 @@ class BackgroundAgentDispatcher:
         )
         current_json = current_affect.model_dump_json()
         world_json = current_world.model_dump_json()
+
+        relationship_block = ""
+        if seed is not None:
+            relationship_block = (
+                "## Companion identity & relationship context\n"
+                f"Name: {seed.companion_name}\n"
+                f"Relationship: {seed.relationship_setup}\n"
+                f"Backstory: {seed.backstory}\n"
+                "Use this context to calibrate appropriate affect values. "
+                "For example, a long-term romantic partner should start with "
+                "higher trust and closeness than a new acquaintance.\n\n"
+            )
+
         prompt = (
             "You are an affect-state analyser for a companion AI. "
             "Given the recent conversation and the companion's current "
             "internal state, return a revised affect state, the companion's "
             "perception of the scene (world state), and an internal "
             "monologue as strict JSON.\n\n"
+            f"{relationship_block}"
             "## Current companion affect\n"
             f"{current_json}\n\n"
             "## Current world state (companion's perception)\n"
@@ -411,17 +445,16 @@ class BackgroundAgentDispatcher:
             "  mood (string — one of: curious, wary, anxious, amused, "
             "frustrated, concerned, excited, hurt, withdrawn, fond, "
             "playful)\n"
-            "  valence (float -1.0 to 1.0)\n"
-            "  arousal (float 0.0 to 1.0)\n"
-            "  comfort_level (float 0 to 10)\n"
-            "  trust (float 0 to 10)\n"
-            "  attraction (float 0 to 10)\n"
-            "  engagement (float 0 to 10)\n"
-            "  shyness (float 0 to 10, high=reserved/hesitant)\n"
-            "  patience (float 0 to 10)\n"
-            "  curiosity (float 0 to 10)\n"
-            "  vulnerability (float 0 to 10, willingness to share "
-            "deeper feelings)\n"
+            "  valence (float -1.0 to 1.0; pleasure/displeasure)\n"
+            "  arousal (float 0.0 to 1.0; activation/energy level)\n"
+            "  dominance (float 0.0 to 1.0; assertive and open vs "
+            "submissive and guarded)\n"
+            "  trust (float 0 to 10; earned through consistency, "
+            "changes slowly)\n"
+            "  closeness (float 0 to 10; emotional intimacy and "
+            "rapport, changes slowly)\n"
+            "  engagement (float 0 to 10; investment in this "
+            "interaction)\n"
             "  recent_triggers (list of up to 3 short strings explaining "
             "what changed)\n"
             "  world (object — the companion's updated perception of "
@@ -449,8 +482,28 @@ class BackgroundAgentDispatcher:
             "  internal_monologue (string — 1-3 sentences of the "
             "companion's private inner thoughts about the conversation "
             "right now. Write in first person as the companion.)\n\n"
-            "Adjust affect values modestly — this is a refinement, "
-            "not a reset. Return only JSON, no explanation."
+            "## Adjustment rules (CRITICAL)\n"
+            "- It is perfectly valid to return the SAME values if nothing "
+            "emotionally significant happened. Most turns should change "
+            "very little or nothing.\n"
+            "- Valence and arousal are MOMENTARY — they can shift per turn "
+            "based on what just happened, and they can go DOWN as well as up. "
+            "A calm conversation should have low arousal (~0.2-0.4), not high.\n"
+            "- Dominance reflects assertiveness vs submissiveness in the "
+            "interaction dynamic. A naturally submissive character stays "
+            "low-to-moderate (0.2-0.5) even when comfortable. Only raise "
+            "dominance if the character is actively taking charge.\n"
+            "- Trust and closeness are SLOW-MOVING relational dimensions. "
+            "They should change by at most ±0.1-0.2 per turn, and only when "
+            "something genuinely trust-building or trust-breaking happens. "
+            "Casual pleasant conversation is NOT enough to increase them.\n"
+            "- Engagement reflects investment in the current interaction. "
+            "It can rise quickly with interesting topics but should also "
+            "drop when conversation becomes routine.\n"
+            "- Do NOT monotonically increase all values. This is unrealistic. "
+            "If arousal went up last turn, consider whether it should stay "
+            "the same or come back down.\n"
+            "Return only JSON, no explanation."
         )
         assert self._affect_refiner is not None
         raw = self._affect_refiner.generate(
@@ -478,6 +531,38 @@ class BackgroundAgentDispatcher:
             metrics.reflector_jobs += reflector_jobs
             metrics.consolidation_jobs += consolidation_jobs
             metrics.failures += failures
+
+
+# Maximum per-turn change allowed for each affect dimension.
+# Fast-moving (momentary): valence, arousal, dominance
+# Slow-moving (relational): trust, closeness, engagement
+_AFFECT_MAX_DELTA: dict[str, float] = {
+    "valence": 0.3,
+    "arousal": 0.25,
+    "dominance": 0.15,
+    "trust": 0.8,
+    "closeness": 0.8,
+    "engagement": 1.5,
+}
+
+
+def _clamp_affect(proposed: CompanionAffect, previous: CompanionAffect) -> CompanionAffect:
+    """Clamp each numeric dimension so it can't swing more than the max delta."""
+    updates: dict[str, object] = {}
+    for field, max_delta in _AFFECT_MAX_DELTA.items():
+        old_val = getattr(previous, field)
+        new_val = getattr(proposed, field)
+        clamped = max(old_val - max_delta, min(old_val + max_delta, new_val))
+        # Also respect the field's own bounds from the schema
+        info = CompanionAffect.model_fields[field]
+        lo = info.metadata[0].ge if info.metadata else None  # type: ignore[union-attr]
+        hi = info.metadata[1].le if len(info.metadata) > 1 else None  # type: ignore[union-attr]
+        if lo is not None:
+            clamped = max(lo, clamped)
+        if hi is not None:
+            clamped = min(hi, clamped)
+        updates[field] = round(clamped, 3)
+    return proposed.model_copy(update=updates)
 
 
 def _parse_affect_response(
@@ -558,6 +643,7 @@ def _parse_state_response(
 
     try:
         affect = CompanionAffect.model_validate(data)
+        affect = _clamp_affect(affect, fallback_affect)
     except Exception:
         affect = fallback_affect
 

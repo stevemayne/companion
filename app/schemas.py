@@ -68,14 +68,10 @@ class CompanionAffect(BaseModel):
     mood: str = Field(default="curious")
     valence: float = Field(default=0.1, ge=-1.0, le=1.0)
     arousal: float = Field(default=0.3, ge=0.0, le=1.0)
-    comfort_level: float = Field(default=3.0, ge=0.0, le=10.0)
+    dominance: float = Field(default=0.4, ge=0.0, le=1.0)
     trust: float = Field(default=3.0, ge=0.0, le=10.0)
-    attraction: float = Field(default=3.0, ge=0.0, le=10.0)
+    closeness: float = Field(default=3.0, ge=0.0, le=10.0)
     engagement: float = Field(default=5.0, ge=0.0, le=10.0)
-    shyness: float = Field(default=6.0, ge=0.0, le=10.0)
-    patience: float = Field(default=7.0, ge=0.0, le=10.0)
-    curiosity: float = Field(default=6.0, ge=0.0, le=10.0)
-    vulnerability: float = Field(default=2.0, ge=0.0, le=10.0)
     recent_triggers: list[str] = Field(default_factory=list)
 
 
