@@ -661,8 +661,13 @@ def _render_character(label: str, state: CharacterState) -> list[str]:
     return parts
 
 
-def _build_scene_block(world: WorldState, companion_name: str = "You") -> str:
+def _build_scene_block(
+    world: WorldState,
+    companion_name: str = "You",
+    user_name: str | None = None,
+) -> str:
     """Render the companion's world perception as a prompt section."""
+    user_label = user_name or "The user"
     lines = [
         "## Current Scene"
         " (your perception of the scene — use this to stay consistent)",
@@ -677,7 +682,7 @@ def _build_scene_block(world: WorldState, companion_name: str = "You") -> str:
         for part in self_parts:
             lines.append(f"- {part}")
 
-    user_parts = _render_character("The user", world.user_state)
+    user_parts = _render_character(user_label, world.user_state)
     if user_parts:
         for part in user_parts:
             lines.append(f"- {part}")
@@ -719,6 +724,9 @@ def _build_affect_block(affect: CompanionAffect) -> str:
         "## Your Inner Emotional State"
         " (internal — let this shape your tone, never state it directly)",
         f"You're feeling {affect.mood}.",
+        "This is your emotional baseline going into this turn. If something "
+        "dramatic happens right now, let your authentic in-the-moment reaction "
+        "override this baseline.",
     ]
     if affect.recent_triggers:
         lines.append(f"Recent factors: {'; '.join(affect.recent_triggers)}")
@@ -1036,12 +1044,19 @@ class CognitiveOrchestrator:
         companion_name = (
             seed_context.seed.companion_name if seed_context else "You"
         )
+        user_name = (
+            seed_context.seed.user_name
+            if seed_context and seed_context.seed.user_name
+            else None
+        )
 
         context_parts: list[str] = []
         if affect is not None:
             context_parts.append(_build_affect_block(affect))
         if world is not None and world != WorldState():
-            context_parts.append(_build_scene_block(world, companion_name))
+            context_parts.append(
+                _build_scene_block(world, companion_name, user_name),
+            )
         elif monologue is not None and monologue.user_state:
             # Legacy fallback
             context_parts.append(_build_user_context_block(monologue.user_state))
@@ -1265,6 +1280,11 @@ class ChatService:
             assistant_message=assistant_message.content,
             companion_name=companion.name if companion else None,
             companion_id=companion.companion_id if companion else None,
+            user_name=(
+                seed_context.seed.user_name
+                if seed_context and seed_context.seed.user_name
+                else None
+            ),
         )
 
         if cache_key is not None:

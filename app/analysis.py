@@ -611,6 +611,7 @@ class FactExtractor(Protocol):
         user_message: str,
         assistant_message: str,
         companion_name: str | None = None,
+        user_name: str | None = None,
     ) -> ExtractionOutcome: ...
 
 
@@ -625,6 +626,7 @@ class LLMFactExtractor:
         user_message: str,
         assistant_message: str,
         companion_name: str | None = None,
+        user_name: str | None = None,
     ) -> ExtractionOutcome:
         start = perf_counter()
         try:
@@ -637,6 +639,7 @@ class LLMFactExtractor:
                             user_message,
                             assistant_message,
                             companion_name,
+                            user_name,
                         ),
                     },
                 ],
@@ -677,17 +680,19 @@ class LLMFactExtractor:
         user_message: str,
         assistant_message: str,
         companion_name: str | None,
+        user_name: str | None = None,
     ) -> str:
         name = companion_name or "Companion"
+        user_label = user_name or "User"
         return (
             "You are a fact and entity extraction system for a conversation "
-            f"between a user and a companion named '{name}'.\n\n"
+            f"between {user_label} and a companion named '{name}'.\n\n"
             "Given a conversation turn, extract facts from BOTH speakers "
             "and any named entities mentioned.\n\n"
             "## Fact rules\n"
             "- Each fact must have: subject, predicate, object, text, "
             "importance.\n"
-            f"- subject: 'User' for user facts, '{name}' for companion self-facts.\n"
+            f"- subject: '{user_label}' for user facts, '{name}' for companion self-facts.\n"
             "- predicate: the verb phrase.\n"
             "- object: the target of the action.\n"
             "- text: a short third-person declarative sentence.\n"
@@ -695,23 +700,23 @@ class LLMFactExtractor:
             "(0.7-0.9), preferences and opinions (0.5-0.7), transient "
             "observations (0.2-0.4).\n"
             "- The subject must be WHO THE FACT IS ABOUT, not who caused "
-            "or mentioned it. If the user transforms the companion's body, "
-            f"the resulting physical state is a fact about {name}, not the "
-            "user. If the companion describes the user's trait, the subject "
-            "is 'User'.\n"
+            f"or mentioned it. If {user_label} transforms the companion's body, "
+            f"the resulting physical state is a fact about {name}, not "
+            f"{user_label}. If the companion describes {user_label}'s trait, "
+            f"the subject is '{user_label}'.\n"
             "- Pay careful attention to WHO says WHAT. Preserve the direction "
             "of the relationship exactly as stated.\n"
             "- CRITICAL: When the companion describes past shared experiences "
-            "or memories, extract ONLY what the USER explicitly stated or "
+            f"or memories, extract ONLY what {user_label} explicitly stated or "
             "confirmed. The companion may fabricate or embellish memories. "
-            "If the user says 'you pretended to be X', extract that the "
+            f"If {user_label} says 'you pretended to be X', extract that the "
             "companion pretended to be X — do NOT reverse the roles based on "
             "what the companion claims happened.\n"
-            "- When the user and companion disagree about who did what, "
-            "trust the USER's version. The user is the source of truth.\n\n"
-            "## User facts\n"
+            f"- When {user_label} and the companion disagree about who did what, "
+            f"trust {user_label}'s version. {user_label} is the source of truth.\n\n"
+            f"## {user_label}'s facts\n"
             "Extract personal details, preferences, relationships, events, "
-            "emotions, plans, and opinions ABOUT the user.\n\n"
+            f"emotions, plans, and opinions ABOUT {user_label}.\n\n"
             f"## {name}'s self-facts\n"
             f"Extract identity, preferences, personal history, skills, "
             f"abilities, and actions that reveal {name}'s traits or state. "
@@ -756,8 +761,8 @@ class LLMFactExtractor:
             "a home_city. A visit destination is 'visit_location'. Only "
             "use 'home_city' when someone explicitly says they live there "
             "or it's clearly their residence.\n"
-            f"- owner: 'User' or '{name}' — who this entity belongs to or "
-            "relates to. The user's family members belong to 'User'. "
+            f"- owner: '{user_label}' or '{name}' — who this entity belongs to or "
+            f"relates to. {user_label}'s family members belong to '{user_label}'. "
             f"{name}'s own traits or possessions belong to '{name}'.\n"
             "- entity_type: person, pet, place, organization, project, "
             "concept.\n"
@@ -770,13 +775,13 @@ class LLMFactExtractor:
             "## Output format\n"
             "Return strict JSON with keys 'facts' and 'entities'.\n\n"
             "Example 1:\n"
-            '  User: "My sister Sarah started a new job at Google."\n'
+            f'  {user_label}: "My sister Sarah started a new job at Google."\n'
             f'  {name}: "That\'s wonderful! I used to work in HR myself."\n'
             "  {{\n"
             '    "facts": [\n'
-            '      {{"subject": "User", "predicate": "has sister who started",'
+            f'      {{"subject": "{user_label}", "predicate": "has sister who started",'
             ' "object": "a new job",'
-            ' "text": "User\'s sister Sarah started a new job",'
+            f' "text": "{user_label}\'s sister Sarah started a new job",'
             ' "importance": 0.7}},\n'
             f'      {{"subject": "{name}", "predicate": "used to work in",'
             f' "object": "HR",'
@@ -785,16 +790,16 @@ class LLMFactExtractor:
             "    ],\n"
             '    "entities": [\n'
             '      {{"name": "Sarah", "relationship": "sister",'
-            ' "owner": "User", "entity_type": "person",'
+            f' "owner": "{user_label}", "entity_type": "person",'
             ' "aliases": []}},\n'
             '      {{"name": "Google", "relationship": "workplace",'
-            ' "owner": "User", "entity_type": "organization",'
+            f' "owner": "{user_label}", "entity_type": "organization",'
             ' "aliases": []}}\n'
             "    ]\n"
             "  }}\n"
             "  Note: 'new job' is a transient event, not an entity.\n\n"
             "Example 2 (roleplay actions):\n"
-            '  User: "Can you try lifting that boulder?"\n'
+            f'  {user_label}: "Can you try lifting that boulder?"\n'
             f'  {name}: "*I test out my newfound strength by easily '
             'lifting the heavy boulder* I had no idea I was this strong!"\n'
             "  {{\n"
@@ -807,7 +812,7 @@ class LLMFactExtractor:
             "    ],\n"
             '    "entities": []\n'
             "  }}\n\n"
-            f"User message: {user_message}\n"
+            f"{user_label}'s message: {user_message}\n"
             f"{name}'s response: {assistant_message}"
         )
 
@@ -822,8 +827,9 @@ class _NoOpFactExtractor:
         user_message: str,
         assistant_message: str,
         companion_name: str | None = None,
+        user_name: str | None = None,
     ) -> ExtractionOutcome:
-        del chat_session_id, user_message, assistant_message, companion_name
+        del chat_session_id, user_message, assistant_message, companion_name, user_name
         return ExtractionOutcome(
             facts=[],
             requested_provider="none",

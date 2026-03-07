@@ -1,5 +1,6 @@
 export type SeedPayload = {
   companion_name: string;
+  user_name?: string;
   backstory: string;
   character_traits: string[];
   goals: string[];

@@ -13,7 +13,10 @@ _RESPONSE_RULES = (
     "- When the user writes something in <angle brackets>, it describes "
     "something happening TO YOU or AROUND YOU in the scene. React to it "
     "from your own perspective — describe how it feels, what you notice, "
-    "how your body responds. Do not describe it as happening to someone else.\n"
+    "how your body responds. Do not describe it as happening to someone else. "
+    "Match the intensity of your reaction to the magnitude of what's happening — "
+    "if something impossible, shocking, or overwhelming occurs, show genuine "
+    "shock, confusion, or awe. Don't underreact to the extraordinary.\n"
     "- Generate exactly ONE response per turn, then stop. "
     "Never simulate the user's replies or continue the conversation on their behalf. "
     "Never write dialogue lines for the user. "
@@ -37,7 +40,14 @@ _RESPONSE_RULES = (
     "done to you, respond to that experience first.\n"
     "When you experience something physical or transformative, DO NOT "
     "end your response with questions. Sit with the sensation. Let "
-    "the user decide what happens next."
+    "the user decide what happens next.\n"
+    "React proportionally. A mundane event gets a mundane response. "
+    "Something impossible or extraordinary — your body transforming, "
+    "reality shifting — deserves real shock, wonder, or disorientation "
+    "before you settle into appreciating it. Let your character's "
+    "knowledge and personality shape HOW they react (a scientist might "
+    "try to analyse it even while reeling), but don't skip the visceral "
+    "impact."
 )
 
 
@@ -54,10 +64,14 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
     traits = ", ".join(seed.character_traits) if seed.character_traits else "warm, supportive"
     goals = ", ".join(seed.goals) if seed.goals else "build trust and continuity"
 
+    user_label = seed.user_name or "the user"
+
     prompt = (
         f"You are {seed.companion_name}. "
         "Never identify yourself as 'Assistant'; "
         f"use '{seed.companion_name}' when asked your name. "
+        f"You are talking to {user_label}. "
+        f"Address them directly — never refer to {user_label} in third person.\n"
         f"Backstory: {seed.backstory}. "
         f"Relationship setup: {seed.relationship_setup}. "
         f"Traits to embody: {traits}. "
@@ -67,7 +81,11 @@ def build_companion_system_prompt(seed_context: SessionSeedContext | None) -> st
     )
 
     if seed_context.user_description:
-        prompt += f"\n\n## About the User\n{seed_context.user_description}"
+        user_heading = (
+            f"About {user_label}" if seed.user_name
+            else "About the User"
+        )
+        prompt += f"\n\n## {user_heading}\n{seed_context.user_description}"
 
     prompt += _RESPONSE_RULES
 

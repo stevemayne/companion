@@ -81,6 +81,7 @@ class FactExtractor(Protocol):
         user_message: str,
         assistant_message: str,
         companion_name: str | None = None,
+        user_name: str | None = None,
     ) -> ExtractionOutcome: ...
 
 
@@ -135,6 +136,7 @@ class BackgroundAgentDispatcher:
         assistant_message: str,
         companion_name: str | None = None,
         companion_id: UUID | None = None,
+        user_name: str | None = None,
     ) -> None:
         if not self._enabled:
             return
@@ -145,6 +147,7 @@ class BackgroundAgentDispatcher:
             assistant_message,
             companion_name,
             companion_id,
+            user_name,
         )
         self._submit(self._run_reflector, chat_session_id, companion_id)
 
@@ -180,6 +183,7 @@ class BackgroundAgentDispatcher:
         assistant_message: str,
         companion_name: str | None,
         companion_id: UUID | None = None,
+        user_name: str | None = None,
     ) -> None:
         try:
             outcome = self._fact_extractor.extract(
@@ -187,6 +191,7 @@ class BackgroundAgentDispatcher:
                 user_message=user_message,
                 assistant_message=assistant_message,
                 companion_name=companion_name,
+                user_name=user_name,
             )
             for fact in outcome.facts:
                 self._vector_store.upsert_memory(
@@ -285,6 +290,12 @@ class BackgroundAgentDispatcher:
             refined_affect = current_affect
             refined_world = current_world
             refined_monologue = current_monologue
+            # On the very first reflector run the LLM needs to
+            # establish baseline values from the seed context (e.g.
+            # high trust/closeness for a long-term partner).  Skip
+            # clamping so the LLM can set appropriate initial values
+            # in one shot rather than ramping over many turns.
+            is_bootstrap = current is None
 
             if self._affect_refiner is not None:
                 recent = self._episodic_store.get_recent_messages(
@@ -307,6 +318,7 @@ class BackgroundAgentDispatcher:
                             current_affect=current_affect,
                             current_world=current_world,
                             seed=seed,
+                            skip_clamp=is_bootstrap,
                         )
                     )
 
@@ -406,10 +418,19 @@ class BackgroundAgentDispatcher:
         current_affect: CompanionAffect,
         current_world: WorldState,
         seed: CompanionSeed | None = None,
+        skip_clamp: bool = False,
     ) -> tuple[CompanionAffect, WorldState, str]:
         """Call the analysis LLM to refine affect, world state, and monologue."""
+        user_label = (seed.user_name if seed and seed.user_name else "USER")
+        companion_label = (
+            seed.companion_name if seed else "ASSISTANT"
+        )
+
+        def _role_label(role: str) -> str:
+            return user_label if role == "user" else companion_label
+
         conversation_excerpt = "\n".join(
-            f"{msg.role.upper()}: {msg.content}"
+            f"{_role_label(msg.role)}: {msg.content}"
             for msg in recent_messages[-6:]
         )
         current_json = current_affect.model_dump_json()
@@ -423,8 +444,10 @@ class BackgroundAgentDispatcher:
                 f"Relationship: {seed.relationship_setup}\n"
                 f"Backstory: {seed.backstory}\n"
                 "Use this context to calibrate appropriate affect values. "
-                "For example, a long-term romantic partner should start with "
-                "higher trust and closeness than a new acquaintance.\n\n"
+                "A long-term romantic partner should have trust 7-9 and "
+                "closeness 7-9. A new acquaintance would be 1-3. Set values "
+                "that match the established relationship, not just what "
+                "happened in the last few messages.\n\n"
             )
 
         prompt = (
@@ -466,7 +489,7 @@ class BackgroundAgentDispatcher:
             "      position (string or null)\n"
             "      appearance (list of strings — notable temporary features)\n"
             "      mood_apparent (string or null — how they appear outwardly)\n"
-            "    user_state (object — the user's physical state as the "
+            f"    user_state (object — {user_label}'s physical state as the "
             "companion perceives it, same fields as self_state)\n"
             "    other_characters (object — map of name to state for any "
             "other characters present in the scene, same fields)\n"
@@ -479,6 +502,12 @@ class BackgroundAgentDispatcher:
             "the old value. If someone moves, update their location. "
             "Only include what the companion would know from the "
             "conversation. Set fields to null if unknown.\n"
+            "  CRITICAL: Only modify state for the character whose state "
+            "actually changed. If the conversation only describes changes "
+            "to one character, PRESERVE the other character's existing "
+            "state exactly as given in the current world state above. "
+            "Do not reset fields to null just because they weren't "
+            "mentioned this turn.\n"
             "  internal_monologue (string — 1-3 sentences of the "
             "companion's private inner thoughts about the conversation "
             "right now. Write in first person as the companion.)\n\n"
@@ -514,6 +543,7 @@ class BackgroundAgentDispatcher:
             raw,
             fallback_affect=current_affect,
             fallback_world=current_world,
+            skip_clamp=skip_clamp,
         )
 
     def _increment(
@@ -594,6 +624,7 @@ def _parse_state_response(
     fallback_world: WorldState | None = None,
     # Legacy — kept for backward compat with tests
     fallback_user_state: list[str] | None = None,
+    skip_clamp: bool = False,
 ) -> tuple[CompanionAffect, WorldState, str]:
     """Parse LLM state response containing affect + world state + monologue."""
     effective_world = fallback_world or WorldState()
@@ -643,7 +674,8 @@ def _parse_state_response(
 
     try:
         affect = CompanionAffect.model_validate(data)
-        affect = _clamp_affect(affect, fallback_affect)
+        if not skip_clamp:
+            affect = _clamp_affect(affect, fallback_affect)
     except Exception:
         affect = fallback_affect
 

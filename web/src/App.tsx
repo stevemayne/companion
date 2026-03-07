@@ -22,6 +22,7 @@ type SseEventPayload = Record<string, unknown>;
 
 type SeedDraft = {
   companion_name: string;
+  user_name: string;
   backstory: string;
   character_traits: string;
   goals: string;
@@ -45,6 +46,7 @@ function parseEventData(raw: string): SseEventPayload {
 function toDraft(seed: SeedPayload, userDescription: string, notes: string): SeedDraft {
   return {
     companion_name: seed.companion_name,
+    user_name: seed.user_name ?? "",
     backstory: seed.backstory,
     character_traits: seed.character_traits.join(", "),
     goals: seed.goals.join(", "),
@@ -65,6 +67,7 @@ function toPayload(draft: SeedDraft): { seed: SeedPayload; user_description?: st
   return {
     seed: {
       companion_name: draft.companion_name.trim() || DEFAULT_SEED.companion_name,
+      user_name: draft.user_name.trim() || undefined,
       backstory: draft.backstory.trim() || DEFAULT_SEED.backstory,
       character_traits: splitList(draft.character_traits),
       goals: splitList(draft.goals),
@@ -85,6 +88,7 @@ function loadSeedDraft(): SeedDraft {
     const parsed = JSON.parse(raw) as SeedDraft;
     return {
       companion_name: parsed.companion_name || fallback.companion_name,
+      user_name: parsed.user_name ?? "",
       backstory: parsed.backstory || fallback.backstory,
       character_traits: parsed.character_traits || fallback.character_traits,
       goals: parsed.goals || fallback.goals,
@@ -515,6 +519,16 @@ export function App() {
                       setSeedDraft((prev) => ({ ...prev, companion_name: e.target.value }))
                     }
                     placeholder="Companion name"
+                  />
+                </div>
+                <div className="row">
+                  <label>Your name</label>
+                  <input
+                    value={seedDraft.user_name}
+                    onChange={(e) =>
+                      setSeedDraft((prev) => ({ ...prev, user_name: e.target.value }))
+                    }
+                    placeholder="Used in memories & scene"
                   />
                 </div>
                 <div className="row">

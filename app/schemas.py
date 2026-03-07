@@ -109,6 +109,7 @@ class MonologueState(BaseModel):
 
 class CompanionSeed(BaseModel):
     companion_name: str = Field(min_length=1)
+    user_name: str | None = None
     backstory: str = Field(min_length=1)
     character_traits: list[str] = Field(default_factory=list)
     goals: list[str] = Field(default_factory=list)
